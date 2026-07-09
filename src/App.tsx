@@ -1,122 +1,83 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useEffect } from 'react';
+import { useHardwareTelemetry } from './hooks/useHardwareTelemetry';
+import { useAudioEngine } from './hooks/useAudioEngine';
+import { useVisionEngine } from './hooks/useVisionEngine';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const { status, errorMsg, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry();
+  const { isPlaying, toggleEngine, bpm } = useAudioEngine(audioContextRef.current, analyserRef.current);
+  
+  // Wire up Engine B (Vision)
+  const { tensionLevel } = useVisionEngine(videoRef, poseLandmarkerRef.current, isPlaying);
+
+  // Listen for Spacebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && status === 'calibrated') {
+        toggleEngine();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [status, toggleEngine]);
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div 
+      className="min-h-screen bg-neutral-950 text-neutral-200 flex flex-col items-center justify-between p-8 overflow-hidden relative transition-colors duration-500"
+      style={{
+        // The Peripheral Tension Glow - Subtly shifts the outer edges red if tension spikes
+        boxShadow: isPlaying ? `inset 0 0 ${tensionLevel * 2}px ${tensionLevel / 2}px rgba(239, 68, 68, ${tensionLevel / 300})` : 'none'
+      }}
+    >
+      
+      <video ref={videoRef} className="hidden" playsInline muted />
 
-      <div className="ticks"></div>
+      {/* TOP BAR */}
+      <div className="w-full max-w-4xl flex justify-between items-start text-xs font-mono text-neutral-600 tracking-widest uppercase z-10">
+        <span>[ 14:22 Remaining ]</span>
+        <span>Sys_Opt</span>
+      </div>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      {/* CENTER STAGE */}
+      <div className="flex flex-col items-center justify-center space-y-8 z-10 w-full flex-grow">
+        
+        {!isPlaying && (
+          <div className="text-center space-y-4">
+            <h1 className="text-2xl font-light tracking-widest opacity-80 transition-opacity">
+              PROJECT-KELSO
+            </h1>
+            <p className={`text-sm font-mono transition-opacity duration-1000 ${status === 'calibrated' ? 'text-emerald-500/80' : 'text-neutral-500 animate-pulse'}`}>
+              {status === 'awaiting_permissions' && "[ Requesting Sensor Access ]"}
+              {status === 'initializing_ai' && "[ Downloading Kinematic Models ]"}
+              {status === 'calibrated' && "[ Sensors Locked. Press SPACE to begin ]"}
+              {status === 'error' && <span className="text-red-500/80">[ SYSTEM FAULT: {errorMsg} ]</span>}
+            </p>
+          </div>
+        )}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+        {isPlaying && (
+          <div className="text-center space-y-12">
+            <div className={`w-32 h-32 border ${tensionLevel > 50 ? 'border-red-900/50' : 'border-neutral-800'} rounded-full flex items-center justify-center opacity-30 mx-auto animate-[pulse_4s_ease-in-out_infinite] transition-colors duration-500`}>
+              <div className={`w-24 h-24 border ${tensionLevel > 50 ? 'border-red-800/50' : 'border-neutral-700'} rounded-full flex items-center justify-center transition-colors duration-500`}>
+                 <div className={`w-16 h-16 border ${tensionLevel > 50 ? 'border-red-700/50' : 'border-neutral-600'} rounded-full transition-colors duration-500`}></div>
+              </div>
+            </div>
+            
+            <p className="text-xs font-mono text-neutral-500 tracking-[0.3em] uppercase">
+              Phase 1: Weak-Hand Leveler
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* BOTTOM BAR */}
+      <div className="w-full max-w-4xl flex justify-between items-end text-xs font-mono text-neutral-600 tracking-widest z-10">
+        <span>[ Mode: Isochronous ]</span>
+        <span>[ Target: {bpm} BPM ]</span>
+      </div>
+
+    </div>
+  );
 }
 
-export default App
+export default App;
