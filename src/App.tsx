@@ -2,13 +2,17 @@ import { useEffect } from 'react';
 import { useHardwareTelemetry } from './hooks/useHardwareTelemetry';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { useVisionEngine } from './hooks/useVisionEngine';
+import { useSessionTelemetry } from './hooks/useSessionTelemetry';
 
 function App() {
   const { status, errorMsg, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry();
   const { isPlaying, toggleEngine, bpm } = useAudioEngine(audioContextRef.current, analyserRef.current);
   
-  // Wire up Engine B (Vision)
+  // Engine B: Vision & Tension Tracking
   const { tensionLevel } = useVisionEngine(videoRef, poseLandmarkerRef.current, isPlaying);
+  
+  // Engine C/Aggregator: Session Data Logging
+  const { sessionData } = useSessionTelemetry(isPlaying, tensionLevel);
 
   // Listen for Spacebar
   useEffect(() => {
@@ -25,7 +29,7 @@ function App() {
     <div 
       className="min-h-screen bg-neutral-950 text-neutral-200 flex flex-col items-center justify-between p-8 overflow-hidden relative transition-colors duration-500"
       style={{
-        // The Peripheral Tension Glow - Subtly shifts the outer edges red if tension spikes
+        // Peripheral Tension Glow
         boxShadow: isPlaying ? `inset 0 0 ${tensionLevel * 2}px ${tensionLevel / 2}px rgba(239, 68, 68, ${tensionLevel / 300})` : 'none'
       }}
     >
@@ -70,9 +74,9 @@ function App() {
         )}
       </div>
 
-      {/* BOTTOM BAR */}
+      {/* BOTTOM BAR - NOW TRACKING HITS */}
       <div className="w-full max-w-4xl flex justify-between items-end text-xs font-mono text-neutral-600 tracking-widest z-10">
-        <span>[ Mode: Isochronous ]</span>
+        <span>[ Hits Logged: {sessionData.length} ]</span>
         <span>[ Target: {bpm} BPM ]</span>
       </div>
 

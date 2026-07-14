@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 
 export function useAudioEngine(audioContext: AudioContext | null, analyser: AnalyserNode | null) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -7,9 +7,15 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
   const nextNoteTimeRef = useRef(0);
   const timerIDRef = useRef<number | null>(null);
   
-  // Basic Transient Detection (Volume Threshold)
+  // ARCHITECTURAL FIX: Use a ref to track isPlaying state without triggering circular re-renders
+  const isPlayingRef = useRef(isPlaying);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+  
+  // Basic Transient Detection (Volume Threshold & Delta Calculation)
   const checkTransients = useCallback(() => {
-    if (!analyser) return;
+    if (!analyser || !audioContext) return;
     
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteTimeDomainData(dataArray);
@@ -20,16 +26,27 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
       if (volume > maxVolume) maxVolume = volume;
     }
 
-    // If volume spikes above threshold (e.g., a hard tap), log it.
-    // In the future, we will compare this timestamp to nextNoteTimeRef to calculate Constant Error (CE)
+    // If a tap is detected
     if (maxVolume > 40) {
-      console.log("Transient detected (Tap!) - Vol:", maxVolume);
+      const currentTime = audioContext.currentTime;
+      // Calculate delta: Negative means rushing (early), Positive means dragging (late)
+      const delta = (currentTime - nextNoteTimeRef.current) * 1000; 
+      
+      // Prevent logging the same tap multiple times in a 100ms window
+      if (Math.abs(delta) < 200) { 
+        // Dispatch a custom event so our Aggregator can catch it
+        const tapEvent = new CustomEvent('kelso-tap', { 
+          detail: { delta, volume: maxVolume, timestamp: Date.now() } 
+        });
+        window.dispatchEvent(tapEvent);
+      }
     }
     
-    if (isPlaying) {
+    // Check the ref instead of state to avoid circular dependency
+    if (isPlayingRef.current) {
       requestAnimationFrame(checkTransients);
     }
-  }, [analyser, isPlaying]);
+  }, [analyser, audioContext]);
 
   // Metronome Click Generator
   const scheduleNote = useCallback((time: number) => {
@@ -76,7 +93,10 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
       setIsPlaying(true);
       nextNoteTimeRef.current = audioContext.currentTime + 0.05;
       scheduler();
-      checkTransients(); // Start listening for taps
+      
+      // Using a micro-delay (requestAnimationFrame) ensures isPlayingRef 
+      // updates before checkTransients fires, keeping the audio loop stable.
+      requestAnimationFrame(checkTransients);
     }
   }, [audioContext, isPlaying, scheduler, checkTransients]);
 
