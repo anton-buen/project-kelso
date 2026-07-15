@@ -1,43 +1,42 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
-export type HitData = {
-  timestamp: number;
+// The shape of our clinical data payload
+export interface HitData {
   deltaMs: number;
   tensionScore: number;
-};
+  timestamp: number;
+}
 
 export function useSessionTelemetry(isPlaying: boolean, currentTension: number) {
+  // SOURCE OF TRUTH: The array holding the user's performance data
   const [sessionData, setSessionData] = useState<HitData[]>([]);
-  // We use a ref to track tension so the event listener always has the latest value 
-  // without needing to re-bind on every frame.
-  const tensionRef = useRef(currentTension);
 
+  // The architectural fix: A dedicated method to safely clear the state
+  const resetSession = () => {
+    setSessionData([]);
+  };
+
+  // Listens for transient strikes from the Audio Engine
   useEffect(() => {
-    tensionRef.current = currentTension;
-  }, [currentTension]);
+    // Assuming your audio engine dispatches a custom event when a hit is registered
+    const handlePhysicalHit = (event: Event) => {
+      if (!isPlaying) return;
 
-  useEffect(() => {
-    if (!isPlaying) return;
-
-    const handleTap = (e: Event) => {
-      const customEvent = e as CustomEvent;
+      const customEvent = event as CustomEvent<{ deltaMs: number }>;
       
-      const newHit: HitData = {
-        timestamp: customEvent.detail.timestamp,
-        deltaMs: customEvent.detail.delta,
-        tensionScore: tensionRef.current
-      };
-
-      // Add to our running session array
-      setSessionData(prev => [...prev, newHit]);
+      setSessionData(prev => [...prev, {
+        deltaMs: customEvent.detail.deltaMs,
+        tensionScore: currentTension, // Captured exactly at the moment of impact
+        timestamp: Date.now()
+      }]);
     };
 
-    window.addEventListener('kelso-tap', handleTap);
+    window.addEventListener('kelso-hit', handlePhysicalHit);
     
     return () => {
-      window.removeEventListener('kelso-tap', handleTap);
+      window.removeEventListener('kelso-hit', handlePhysicalHit);
     };
-  }, [isPlaying]);
+  }, [isPlaying, currentTension]);
 
-  return { sessionData };
+  return { sessionData, resetSession };
 }

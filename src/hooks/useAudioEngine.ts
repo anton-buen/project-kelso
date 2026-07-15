@@ -27,7 +27,7 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
     }
 
     // If a tap is detected
-    if (maxVolume > 40) {
+    if (maxVolume > 15) {
       const currentTime = audioContext.currentTime;
       // Calculate delta: Negative means rushing (early), Positive means dragging (late)
       const delta = (currentTime - nextNoteTimeRef.current) * 1000; 

@@ -1,61 +1,60 @@
-import { useEffect, useState, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { PoseLandmarker } from '@mediapipe/tasks-vision';
 
 export function useVisionEngine(
   videoRef: React.RefObject<HTMLVideoElement | null>, 
   poseLandmarker: PoseLandmarker | null, 
-  isPlaying: boolean
+  isPlaying: boolean, 
+  baselineY: number | null,
+  targetHand: 'LEFT' | 'RIGHT' | null // <--- We now pass the target hand
 ) {
-  const [tensionLevel, setTensionLevel] = useState(0); // 0 (relaxed) to 100 (stiff)
-  const animationRef = useRef<number | null>(null);
-  const lastVideoTime = useRef(-1);
+  const [tensionLevel, setTensionLevel] = useState(0);
+  const [isShouldersVisible, setIsShouldersVisible] = useState(false);
+  const [currentShoulderY, setCurrentShoulderY] = useState(0);
 
   useEffect(() => {
-    if (!isPlaying || !poseLandmarker || !videoRef.current) return;
+    if (!videoRef.current || !poseLandmarker) return;
 
-    const video = videoRef.current;
+    let animationFrameId: number;
 
-    const processFrame = () => {
-      // Only process if the video frame has actually updated
-      if (video.currentTime !== lastVideoTime.current) {
-        lastVideoTime.current = video.currentTime;
-        
-        const startTimeMs = performance.now();
-        const results = poseLandmarker.detectForVideo(video, startTimeMs);
-
+    const detectPose = () => {
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        const results = poseLandmarker.detectForVideo(videoRef.current, performance.now());
         if (results.landmarks && results.landmarks.length > 0) {
-          const pose = results.landmarks[0];
-          
-          // MediaPipe Landmarks: 11 (Left Shoulder), 12 (Right Shoulder)
-          const leftShoulder = pose[11];
-          const rightShoulder = pose[12];
+          const leftShoulder = results.landmarks[0][11];
+          const rightShoulder = results.landmarks[0][12];
 
-          // Basic tension heuristic: Shoulders rising in the Y-axis.
-          // (Y is 0.0 at the top of the frame, 1.0 at the bottom).
-          // If Y gets smaller, the shoulders are hiking up (tension).
-          const averageShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-          
-          // Map shoulder height to a 0-100 tension score
-          // (These thresholds would be calibrated to the user in a real scenario)
-          let currentTension = 0;
-          if (averageShoulderY < 0.45) { // Threshold for "shoulders up"
-            currentTension = Math.min(100, (0.45 - averageShoulderY) * 500);
+          // PASSIVE GATE: Both shoulders must be visible to ensure posture
+          const visible = (leftShoulder.visibility || 0) > 0.85 && (rightShoulder.visibility || 0) > 0.85;
+          setIsShouldersVisible(visible);
+
+          if (visible) {
+            // ISOLATION FIX: Only track the specific shoulder being trained
+            let activeY = (leftShoulder.y + rightShoulder.y) / 2; // Default
+            if (targetHand === 'LEFT') activeY = leftShoulder.y;
+            if (targetHand === 'RIGHT') activeY = rightShoulder.y;
+
+            setCurrentShoulderY(activeY);
+
+            // TENSION CALCULATION
+            if (isPlaying && baselineY !== null) {
+              const difference = baselineY - activeY;
+              const newTension = Math.max(0, difference * 2000); 
+              setTensionLevel(Math.min(100, newTension));
+            } else {
+              setTensionLevel(0);
+            }
+          } else {
+            setTensionLevel(0);
           }
-          
-          setTensionLevel(currentTension);
         }
       }
-      
-      animationRef.current = requestAnimationFrame(processFrame);
+      animationFrameId = requestAnimationFrame(detectPose);
     };
 
-    // Start the ML loop
-    animationRef.current = requestAnimationFrame(processFrame);
+    detectPose();
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [videoRef, poseLandmarker, isPlaying, baselineY, targetHand]);
 
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [isPlaying, poseLandmarker, videoRef]);
-
-  return { tensionLevel };
+  return { tensionLevel, isShouldersVisible, currentShoulderY };
 }

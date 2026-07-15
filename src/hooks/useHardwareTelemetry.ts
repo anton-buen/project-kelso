@@ -20,9 +20,12 @@ export function useHardwareTelemetry() {
         // 1. Request Camera & Mic Access
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-          audio: true,
+          audio: {
+            echoCancellation: { exact: false },
+            autoGainControl: { exact: false },
+            noiseSuppression: { exact: false }
+          }
         });
-
         if (!isMounted) return;
 
         // Bind the video stream to our hidden video element
