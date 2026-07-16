@@ -33,9 +33,63 @@ const LOADING_REMARKS = [
   "If you can read this, you're very patient...",
   "If you can read this, you're extremely patient..."
 ];
-
 export default function App() {
-  const [appPhase, setAppPhase] = useState<'idle' | 'baseline' | 'active' | 'analyzing' | 'complete'>('idle');
+  const [isBooted, setIsBooted] = useState(false);
+
+  // Gating the hardware hooks behind explicit intent to protect webcam privacy.
+  if (!isBooted) {
+    return <LandingScreen onBoot={() => setIsBooted(true)} />;
+  }
+
+  return <KelsoWorkspace />;
+}
+
+// ==========================================
+// 1. THE LANDING SCREEN (Zero Hardware Hooks)
+// ==========================================
+function LandingScreen({ onBoot }: { onBoot: () => void }) {
+  return (
+    <div className="min-h-screen bg-[#0a0a09] text-zinc-200 flex flex-col items-center justify-center p-6 overflow-hidden relative font-sans selection:bg-[#C2D685]/30">
+      
+      <div className="z-10 w-full max-w-xl flex flex-col items-center justify-center flex-grow transition-all duration-500">
+        
+        {/* Seamless Header - Aligns perfectly with the Workspace header */}
+        <div className="text-center space-y-4 opacity-90 mb-12">
+          <h1 className="text-2xl font-light tracking-tight text-zinc-100">Project Kelso</h1>
+          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-[0.3em] animate-in fade-in duration-1000 delay-300">
+            Learning Drums Without Drums
+          </p>
+        </div>
+
+        <button 
+          onClick={onBoot}
+          className="group relative inline-flex items-center justify-center px-8 py-4 rounded-full bg-white/5 border border-white/10 hover:bg-[#E7FF9E] hover:text-[#0e0f0c] hover:border-[#E7FF9E] transition-all duration-500 active:scale-95 overflow-hidden animate-in slide-in-from-bottom-4 fade-in duration-1000 delay-500"
+        >
+          <span className="relative z-10 text-[10px] font-mono uppercase tracking-widest font-bold transition-colors duration-500">
+            Practice
+          </span>
+        </button>
+      </div>
+
+      {/* Auxiliary Links */}
+      <div className="absolute bottom-10 flex gap-8 text-[10px] font-mono text-zinc-600 uppercase tracking-widest animate-in fade-in duration-1000 delay-700">
+        <a href="https://github.com/your-repo/project-kelso" target="_blank" rel="noreferrer" className="hover:text-zinc-400 transition-colors">
+          [ Repository ]
+        </a>
+        <a href="mailto:feedback@projectkelso.com" className="hover:text-zinc-400 transition-colors">
+          [ Feedback ]
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 2. THE CORE WORKSPACE (Hardware Engaged)
+// ==========================================
+function KelsoWorkspace() {
+  const [appPhase, setAppPhase] = useState<'idle' | 'baseline' | 'countdown' | 'active' | 'analyzing' | 'complete'>('idle');
+  const [countdownVal, setCountdownVal] = useState(5);
   const [targetHand, setTargetHand] = useState<'LEFT' | 'RIGHT' | null>(null);
   const [baselineY, setBaselineY] = useState<number | null>(null);
   
@@ -43,13 +97,16 @@ export default function App() {
   const [isVaultOpen, setIsVaultOpen] = useState(false);
   
   const [bpm, setBpm] = useState(120);
-  const [pattern, setPattern] = useState<RhythmPattern>('quarter');
+  const [pattern, setPattern] = useState<any>('quarter'); // Mapped loosely to avoid import issues from snippet cutoffs
+  
+  // Minimalist Remarks
+  const LOADING_REMARKS = ["Synthesizing Agent...", "Formatting Ledger...", "Uploading Telemetry...", "Aligning Coordinates..."];
   const [loadingText, setLoadingText] = useState(LOADING_REMARKS[0]);
 
-  // ARCHITECTURAL ADDITION: 5-Second Calibration State
   const [alignmentProgress, setAlignmentProgress] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
+  // Hardware hooks only fire when this component mounts!
   const { status, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry();
   const { isPlaying, toggleEngine } = useAudioEngine(audioContextRef.current, analyserRef.current, bpm, pattern);
   
@@ -64,7 +121,7 @@ export default function App() {
   const currentYRef = useRef(0);
   useEffect(() => { currentYRef.current = currentShoulderY; }, [currentShoulderY]);
 
-  // MANDATORY 5-SECOND POSTURE ALIGNMENT
+  // POSTURE ALIGNMENT LOCK
   useEffect(() => {
     let timer: number;
     if (appPhase === 'idle' && status === 'calibrated' && !isUnlocked) {
@@ -75,16 +132,17 @@ export default function App() {
               setIsUnlocked(true);
               return 100;
             }
-            return prev + 2; // 50 ticks * 100ms = 5 seconds
+            return prev + 2; 
           });
         }, 100);
       } else {
-        setAlignmentProgress(0); // Punishing drop if posture is lost
+        setAlignmentProgress(0); 
       }
     }
     return () => clearInterval(timer);
   }, [appPhase, status, isShouldersVisible, isUnlocked]);
 
+  // LOADING REMARKS
   useEffect(() => {
     let interval: number;
     if (appPhase === 'baseline' || appPhase === 'analyzing') {
@@ -95,17 +153,36 @@ export default function App() {
     return () => clearInterval(interval);
   }, [appPhase]);
 
+  // BASELINE -> COUNTDOWN
   useEffect(() => {
     if (appPhase === 'baseline') {
       const timer = setTimeout(() => {
-        setBaselineY(currentYRef.current);
-        setAppPhase('active');
-        toggleEngine();
+        setAppPhase('countdown');
+        toggleEngine(); 
       }, 2000);
       return () => clearTimeout(timer);
     }
   }, [appPhase, toggleEngine]);
 
+  // COUNTDOWN -> ACTIVE
+  useEffect(() => {
+    let timer: number;
+    if (appPhase === 'countdown') {
+      timer = window.setInterval(() => {
+        setCountdownVal(prev => {
+          if (prev <= 1) {
+            setBaselineY(currentYRef.current);
+            setAppPhase('active');
+            return 5; 
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [appPhase]);
+
+  // SESSION CONCLUDE
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.code === 'Enter' && appPhase === 'active') {
@@ -128,6 +205,7 @@ export default function App() {
     setIsVaultOpen(false);
     setTargetHand(hand);
     resetSession();
+    setCountdownVal(5);
     setAppPhase('baseline');
   };
 
@@ -138,9 +216,19 @@ export default function App() {
     return 'inset 0 0 50px rgba(194, 214, 133, 0.03)';
   };
 
+  const getPatternText = (p: string) => {
+    switch(p) {
+      case 'quarter': return '1/4';
+      case 'eighth': return '1/8';
+      case 'triplet': return '1/3';
+      case 'sixteenth': return '1/16';
+      default: return '1/4';
+    }
+  };
+
   return (
     <div 
-      className="min-h-screen bg-[#0a0a09] text-zinc-200 flex flex-col items-center justify-center p-6 overflow-hidden relative font-sans selection:bg-[#C2D685]/30"
+      className="min-h-screen bg-[#0a0a09] text-zinc-200 flex flex-col items-center justify-center p-6 overflow-hidden relative font-sans selection:bg-[#C2D685]/30 animate-in fade-in duration-1000"
       style={{ boxShadow: getAmbientGlow(), transition: 'box-shadow 0.3s ease-out' }}
     >
       <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover opacity-[0.03] grayscale blur-xl pointer-events-none z-0" playsInline muted />
@@ -148,48 +236,83 @@ export default function App() {
       <div className="z-10 w-full max-w-xl flex flex-col items-center justify-center flex-grow transition-all duration-500">
         
         {appPhase === 'idle' && !isVaultOpen && (
-          <div className="text-center space-y-3 opacity-90 animate-in fade-in duration-1000">
-            <h1 className="text-2xl font-light tracking-tight text-zinc-100">Project Kelso</h1>
-          </div>
+          <>
+            <div className="text-center space-y-4 opacity-90 mb-12">
+              <h1 className="text-2xl font-light tracking-tight text-zinc-100">Project Kelso</h1>
+              {/* Ghost Subtitle */}
+              <p className="text-[10px] font-mono uppercase tracking-[0.3em] opacity-0 pointer-events-none">
+                Learning Drums Without Drums
+              </p>
+            </div>
+            {/* Ghost Button */}
+            <div className="px-8 py-4 border border-transparent opacity-0 pointer-events-none">
+              <span className="text-[10px] font-mono uppercase tracking-widest font-bold">
+                Initiate Workspace
+              </span>
+            </div>
+          </>
         )}
-
+        
         {(appPhase === 'baseline' || appPhase === 'analyzing') && (
           <div className="text-center space-y-6">
             <div className="w-8 h-8 border-[1px] border-[#535C39] border-t-[#C2D685] rounded-full animate-spin mx-auto" />
-            <p className="text-[10px] font-mono text-[#98A869] uppercase tracking-widest animate-pulse">{loadingText}</p>
+            <p className="text-[10px] font-mono text-[#98A869] uppercase tracking-widest animate-pulse h-4">{loadingText}</p>
+          </div>
+        )}
+
+        {appPhase === 'countdown' && (
+          <div className="text-center w-full max-w-sm mx-auto animate-in zoom-in-95 duration-300">
+            <div className="relative flex flex-col justify-center items-center mx-auto w-64 h-64 rounded-full bg-black/40 border border-[#535C39]/30 backdrop-blur-md">
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-4">
+                {targetHand === 'LEFT' ? 'L' : 'R'} • {getPatternText(pattern)} • {bpm} BPM
+              </span>
+              <span className="text-[5rem] font-sans font-extralight text-zinc-100 leading-none">
+                {countdownVal}
+              </span>
+              <span className="text-[10px] font-mono text-[#C2D685] uppercase tracking-widest mt-6 animate-pulse">
+                Prepare
+              </span>
+            </div>
           </div>
         )}
 
         {appPhase === 'active' && (
-          <div className="text-center space-y-10 w-full max-w-sm">
-            {/* The Minimalist Circular Card */}
+          <div className="text-center space-y-10 w-full max-w-sm mx-auto animate-in zoom-in-95 duration-300">
             <div 
-              className={`relative flex flex-col justify-center items-center mx-auto w-56 h-56 rounded-full bg-black/40 border backdrop-blur-md transition-all duration-500 ease-out ${
-                !isShouldersVisible ? 'border-amber-500/30 shadow-[0_0_30px_rgba(245,158,11,0.1)]' : 
-                tensionLevel > 40 ? 'border-red-500/30 shadow-[0_0_40px_rgba(239,68,68,0.15)]' : 
+              className={`relative flex flex-col justify-center items-center mx-auto w-64 h-64 rounded-full bg-black/40 border backdrop-blur-md transition-all duration-500 ease-out ${
+                !isShouldersVisible ? 'border-amber-500/50 shadow-[0_0_30px_rgba(245,158,11,0.15)]' : 
+                tensionLevel > 40 ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 
                 'border-white/5'
               }`}
             >
-              {/* Subtle Pulse Layer */}
               <div 
                 className="absolute inset-0 rounded-full transition-all duration-200 ease-linear"
                 style={{
-                  boxShadow: tensionLevel > 40 ? `inset 0 0 ${tensionLevel}px rgba(239,68,68,0.1)` : 'none',
-                  transform: `scale(${1 + (tensionLevel / 400)})`, // Very subtle kinetic scaling
+                  boxShadow: tensionLevel > 40 ? `inset 0 0 ${tensionLevel}px rgba(239,68,68,0.15)` : 'none',
+                  transform: `scale(${1 + (tensionLevel / 400)})`,
                 }}
               />
 
-              {/* Monolithic Letter */}
-              <span className="text-[5rem] font-light text-zinc-100 z-10 leading-none mb-4">
+              {/* REFINED CLINICAL FONT */}
+              <span className="text-[4.5rem] font-sans font-extralight tracking-widest text-zinc-100 z-10 leading-none mb-6">
                 {targetHand === 'LEFT' ? 'L' : 'R'}
               </span>
               
-              {/* Clinical Status Dot & Text */}
-              <div className="z-10 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/50 border border-white/5">
-                <div className={`w-1.5 h-1.5 rounded-full ${!isShouldersVisible ? 'bg-amber-500 animate-pulse' : tensionLevel > 40 ? 'bg-red-500' : 'bg-[#C2D685]'}`} />
-                <span className="text-[9px] font-mono text-zinc-400 uppercase tracking-widest">
-                  {!isShouldersVisible ? 'Align' : tensionLevel > 40 ? 'Tense' : 'Optimal'}
-                </span>
+              <div className="z-10 min-h-[40px] flex items-center justify-center">
+                {!isShouldersVisible ? (
+                  <span className="text-[10px] font-mono text-amber-500 uppercase tracking-widest bg-amber-500/10 px-4 py-1.5 rounded-full border border-amber-500/20">
+                    Align Posture
+                  </span>
+                ) : tensionLevel > 40 ? (
+                  <span className="text-[10px] font-mono text-red-500 uppercase tracking-widest bg-red-500/10 px-4 py-1.5 rounded-full border border-red-500/20">
+                    High Tension
+                  </span>
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <span className="text-xl font-medium text-[#C2D685] leading-none mb-1">{sessionData.length}</span>
+                    <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Strikes</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -209,7 +332,7 @@ export default function App() {
             <div className="mt-10 pt-6 border-t border-white/5 text-center">
               <button 
                 onClick={() => { setAppPhase('idle'); setIsUnlocked(false); setAlignmentProgress(0); }} 
-                className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors"
+                className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors active:scale-95"
               >
                 Return to Practice
               </button>
@@ -217,32 +340,32 @@ export default function App() {
           </div>
         )}
 
-        {/* VAULT (LEDGER) */}
         {isVaultOpen && appPhase === 'idle' && (
-          <div className="w-full bg-[#11120f]/95 border border-[#535C39]/30 p-8 rounded-[2rem] backdrop-blur-xl shadow-2xl text-left animate-in zoom-in-95 duration-200 mt-8">
-            <div className="flex justify-between items-center mb-6 border-b border-[#535C39]/30 pb-4">
-              <h2 className="text-sm font-medium text-zinc-200">Practice Ledger</h2>
+          <div className="w-full max-w-sm mx-auto bg-[#11120f]/95 border border-[#535C39]/30 p-6 rounded-[2rem] backdrop-blur-xl shadow-2xl text-left animate-in zoom-in-95 duration-200 mt-8">
+            <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-4">
+              <h2 className="text-[10px] font-mono text-zinc-300 uppercase tracking-widest">Data Ledger</h2>
               <div className="flex gap-4 items-center">
-                <span className="text-[10px] font-mono text-zinc-500">{history.length} Sessions</span>
+                <span className="text-[10px] font-mono text-zinc-500">{history.length} LOGS</span>
                 {history.length > 0 && (
-                  <button onClick={clearHistory} className="text-[10px] font-mono text-red-400 hover:text-red-300 uppercase tracking-widest border border-red-500/30 px-2 py-1 rounded-md">
-                    Clear
+                  <button onClick={clearHistory} className="text-[10px] font-mono text-red-500/70 hover:text-red-400 uppercase tracking-widest transition-all active:scale-95">
+                    [ Wipe ]
                   </button>
                 )}
               </div>
             </div>
-            <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
+            
+            <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
               {history.length === 0 ? (
-                <p className="text-[10px] font-mono text-zinc-600 text-center py-8 uppercase tracking-widest">No records found.</p>
+                <p className="text-[10px] font-mono text-zinc-600 text-center py-8 uppercase tracking-widest">No telemetry found.</p>
               ) : (
                 history.map(entry => (
-                  <div key={entry.id} className="p-4 rounded-xl bg-white/[0.02] border border-white/5 transition-colors hover:bg-white/[0.04]">
-                    <div className="flex justify-between items-center text-[10px] text-zinc-500 mb-2">
-                      <span className="font-mono">{new Date(entry.date).toLocaleDateString()}</span>
+                  <div key={entry.id} className="p-3 rounded-xl bg-white/[0.02] border border-white/5 transition-colors hover:bg-white/[0.04]">
+                    <div className="flex justify-between items-center text-[9px] text-zinc-500 mb-1">
+                      <span className="font-mono uppercase tracking-widest">{new Date(entry.date).toLocaleDateString()}</span>
                       <span className="text-[#98A869] font-mono uppercase tracking-widest">{entry.hand}</span>
                     </div>
-                    <div className="text-sm text-zinc-400 line-clamp-2 font-light">
-                      {entry.diagnostic?.summary || "Legacy record."}
+                    <div className="text-xs text-zinc-400 line-clamp-2 font-light">
+                      {entry.diagnostic?.summary || "Legacy data block."}
                     </div>
                   </div>
                 ))
@@ -263,7 +386,7 @@ export default function App() {
                 <div className="space-y-3">
                   <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Rhythm</label>
                   <div className="flex justify-between gap-2">
-                    {(['quarter', 'eighth', 'triplet', 'sixteenth'] as RhythmPattern[]).map((p) => (
+                    {['quarter', 'eighth', 'triplet', 'sixteenth'].map((p) => (
                       <button
                         key={p} onClick={() => setPattern(p)}
                         className={`group relative flex-1 h-10 flex items-center justify-center rounded-xl text-[10px] font-mono transition-all overflow-hidden active:scale-90 ${
@@ -286,7 +409,6 @@ export default function App() {
                     <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Target Tempo</label>
                     <span className="text-xs font-mono text-[#C2D685]">{bpm} BPM</span>
                   </div>
-                  {/* Step forced to 5 for clean ridges */}
                   <input type="range" min="60" max="180" step="5" value={bpm} onChange={(e) => setBpm(parseInt(e.target.value))}
                     className="w-full accent-[#98A869] bg-zinc-800 rounded-full h-1 appearance-none cursor-pointer"
                   />
@@ -313,17 +435,16 @@ export default function App() {
               </div>
             ) : isUnlocked ? (
               <div className="flex gap-2 px-1 animate-in zoom-in-95 duration-200">
-                <button onClick={() => triggerStart('LEFT')} className="group flex items-center justify-center h-10 px-4 rounded-full bg-[#E7FF9E] text-[#0e0f0c] font-semibold transition-all hover:px-6">
+                <button onClick={() => triggerStart('LEFT')} className="group flex items-center justify-center h-10 px-4 rounded-full bg-[#E7FF9E] text-[#0e0f0c] font-semibold transition-all hover:px-6 active:scale-95">
                   <span className="group-hover:hidden text-sm">L</span>
                   <span className="hidden group-hover:block text-xs uppercase tracking-wider">Left</span>
                 </button>
-                <button onClick={() => triggerStart('RIGHT')} className="group flex items-center justify-center h-10 px-4 rounded-full bg-[#E7FF9E] text-[#0e0f0c] font-semibold transition-all hover:px-6">
+                <button onClick={() => triggerStart('RIGHT')} className="group flex items-center justify-center h-10 px-4 rounded-full bg-[#E7FF9E] text-[#0e0f0c] font-semibold transition-all hover:px-6 active:scale-95">
                   <span className="group-hover:hidden text-sm">R</span>
                   <span className="hidden group-hover:block text-xs uppercase tracking-wider">Right</span>
                 </button>
               </div>
             ) : (
-              // Circular Calibration Loader
               <div className="px-6 py-1.5 flex items-center gap-3">
                 <div className="relative w-4 h-4 flex items-center justify-center">
                   <svg className="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
