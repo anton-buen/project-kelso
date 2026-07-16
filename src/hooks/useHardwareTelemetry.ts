@@ -1,23 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 
-export type TelemetryState = 'awaiting_permissions' | 'initializing_ai' | 'calibrated' | 'error';
+export type HardwareStatus = 'awaiting_permissions' | 'initializing_ai' | 'calibrated' | 'error';
 
 export function useHardwareTelemetry() {
-  const [status, setStatus] = useState<TelemetryState>('awaiting_permissions');
+  const [status, setStatus] = useState<HardwareStatus>('awaiting_permissions');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null); // <-- Added here
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    let activeStream: MediaStream | null = null;
 
-    async function initializeHardware() {
+    async function initHardware() {
       try {
-        // 1. Request Camera & Mic Access
+        // 1. Request strict user media constraints (Bypass Browser Processing)
+        setStatus('awaiting_permissions');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
           audio: {
@@ -26,56 +27,81 @@ export function useHardwareTelemetry() {
             noiseSuppression: { exact: false }
           }
         });
-        if (!isMounted) return;
+        activeStream = stream;
 
-        // Bind the video stream to our hidden video element
+        // 2. Bind video stream to the DOM element
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+          videoRef.current.play().catch(err => console.warn("Video stream play interrupted:", err));
         }
 
-        // 2. Initialize the Web Audio Context (Engine A Prep)
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const source = audioContextRef.current.createMediaStreamSource(stream);
-        analyserRef.current = audioContextRef.current.createAnalyser(); // <-- Assigned here
-        source.connect(analyserRef.current); 
+        // 3. Initialize Web Audio Context
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
 
+        // 4. Build the DSP Audio Routing Graph
+        const source = audioCtx.createMediaStreamSource(stream);
+
+        // DSP Filter: Slices out continuous low-frequency noise (like computer fan whirring) below 300Hz
+        const highPassFilter = audioCtx.createBiquadFilter();
+        highPassFilter.type = 'highpass';
+        highPassFilter.frequency.value = 300; 
+
+        // Route: Mic Source -> Biquad High-Pass Filter -> Analyser Node
+        source.connect(highPassFilter);
+        highPassFilter.connect(analyser);
+
+        audioContextRef.current = audioCtx;
+        analyserRef.current = analyser;
+
+        // 5. Initialize MediaPipe Vision Engine
         setStatus('initializing_ai');
-
-        // 3. Initialize MediaPipe Pose Model (Engine B Prep)
         const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         
-        // (We aren't saving this ref yet since Engine B logic comes next, but it initializes successfully)
-        poseLandmarkerRef.current = await PoseLandmarker.createFromOptions(vision, {
+        const landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
             delegate: "GPU"
           },
           runningMode: "VIDEO",
           numPoses: 1
         });
-        
-        if (isMounted) setStatus('calibrated');
+
+        poseLandmarkerRef.current = landmarker;
+        setStatus('calibrated');
 
       } catch (err: any) {
-        console.error("Hardware calibration failed:", err);
-        if (isMounted) {
-          setStatus('error');
-          setErrorMsg(err.message || "Failed to access camera/microphone.");
-        }
+        console.error("Hardware Initialization Fault:", err);
+        setStatus('error');
+        setErrorMsg(err.message || 'Failed to access camera or microphone.');
       }
     }
 
-    initializeHardware();
+    initHardware();
 
+    // Clean up hardware tracks on unmount
     return () => {
-      isMounted = false;
-      if (audioContextRef.current) audioContextRef.current.close();
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+      }
+      if (poseLandmarkerRef.current) {
+        poseLandmarkerRef.current.close();
+      }
     };
   }, []);
 
-  // <-- Now cleanly exporting everything Engine A needs
-  return { status, errorMsg, videoRef, audioContextRef, analyserRef, poseLandmarkerRef }; 
+  return {
+    status,
+    errorMsg,
+    videoRef,
+    audioContextRef,
+    analyserRef,
+    poseLandmarkerRef
+  };
 }

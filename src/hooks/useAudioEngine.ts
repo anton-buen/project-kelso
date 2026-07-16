@@ -1,104 +1,149 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export function useAudioEngine(audioContext: AudioContext | null, analyser: AnalyserNode | null) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [bpm, setBpm] = useState(90); // Default tempo for Weak-Hand Leveler
-  
-  const nextNoteTimeRef = useRef(0);
-  const timerIDRef = useRef<number | null>(null);
-  
-  // ARCHITECTURAL FIX: Use a ref to track isPlaying state without triggering circular re-renders
-  const isPlayingRef = useRef(isPlaying);
+  const [bpm] = useState(120); // Default training tempo
+
+  const schedulerTimerRef = useRef<number | null>(null);
+  const nextStartTimeRef = useRef<number>(0); // Accurate Web Audio clock time (seconds)
+  const nextClickTimeMsRef = useRef<number>(0); // Wall clock time (milliseconds)
+  const clickTimesQueueRef = useRef<number[]>([]); // Tracks planned click times for matching
+
+  // Core Toggle: Handles Audio Context state and session play state
+  const toggleEngine = () => {
+    if (!audioContext) return;
+    if (audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+    setIsPlaying(prev => !prev);
+  };
+
+  // 1. THE METRONOME SCHEDULER (Direct-to-Soundcard Pipeline)
   useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-  
-  // Basic Transient Detection (Volume Threshold & Delta Calculation)
-  const checkTransients = useCallback(() => {
-    if (!analyser || !audioContext) return;
-    
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteTimeDomainData(dataArray);
-    
-    let maxVolume = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      const volume = Math.abs(dataArray[i] - 128); // 128 is silence in 8-bit
-      if (volume > maxVolume) maxVolume = volume;
-    }
-
-    // If a tap is detected
-    if (maxVolume > 15) {
-      const currentTime = audioContext.currentTime;
-      // Calculate delta: Negative means rushing (early), Positive means dragging (late)
-      const delta = (currentTime - nextNoteTimeRef.current) * 1000; 
-      
-      // Prevent logging the same tap multiple times in a 100ms window
-      if (Math.abs(delta) < 200) { 
-        // Dispatch a custom event so our Aggregator can catch it
-        const tapEvent = new CustomEvent('kelso-tap', { 
-          detail: { delta, volume: maxVolume, timestamp: Date.now() } 
-        });
-        window.dispatchEvent(tapEvent);
+    if (!isPlaying || !audioContext) {
+      if (schedulerTimerRef.current) {
+        clearInterval(schedulerTimerRef.current);
+        schedulerTimerRef.current = null;
       }
+      clickTimesQueueRef.current = [];
+      return;
     }
-    
-    // Check the ref instead of state to avoid circular dependency
-    if (isPlayingRef.current) {
-      requestAnimationFrame(checkTransients);
-    }
-  }, [analyser, audioContext]);
 
-  // Metronome Click Generator
-  const scheduleNote = useCallback((time: number) => {
-    if (!audioContext) return;
-    const osc = audioContext.createOscillator();
-    const envelope = audioContext.createGain();
+    const clickIntervalSec = 60 / bpm;
+    const scheduleAheadTime = 0.1; // Look ahead 100ms
     
-    osc.frequency.value = 800; // Crisp "tick" sound
-    envelope.gain.value = 1;
-    envelope.gain.exponentialRampToValueAtTime(0.001, time + 0.05); // Quick fade
-    
-    osc.connect(envelope);
-    envelope.connect(audioContext.destination);
-    
-    osc.start(time);
-    osc.stop(time + 0.05);
-  }, [audioContext]);
+    // Sync initial clocks
+    nextStartTimeRef.current = audioContext.currentTime + 0.05;
+    nextClickTimeMsRef.current = Date.now() + 50;
 
-  // Audio Scheduler Loop
-  const scheduler = useCallback(() => {
-    if (!audioContext) return;
-    
-    // Lookahead window for precise timing
-    while (nextNoteTimeRef.current < audioContext.currentTime + 0.1) {
-      scheduleNote(nextNoteTimeRef.current);
-      // Advance time by quarter note based on BPM
-      nextNoteTimeRef.current += 60.0 / bpm; 
-    }
-    
-    timerIDRef.current = window.setTimeout(scheduler, 25);
-  }, [audioContext, bpm, scheduleNote]);
+    const scheduler = () => {
+      while (nextStartTimeRef.current < audioContext.currentTime + scheduleAheadTime) {
+        // Schedule Oscillator click
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
 
-  const toggleEngine = useCallback(() => {
-    if (!audioContext) return;
-    
-    if (isPlaying) {
-      setIsPlaying(false);
-      if (timerIDRef.current) window.clearTimeout(timerIDRef.current);
-    } else {
-      // Browser requires resuming context on first user interaction
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
+        osc.frequency.setValueAtTime(1000, nextStartTimeRef.current); // 1kHz target click
+        gain.gain.setValueAtTime(0.4, nextStartTimeRef.current);
+        gain.gain.exponentialRampToValueAtTime(0.001, nextStartTimeRef.current + 0.05); // Short snappy snap
+
+        osc.start(nextStartTimeRef.current);
+        osc.stop(nextStartTimeRef.current + 0.06);
+
+        // Record exactly when this click is scheduled to play in wall-clock time
+        clickTimesQueueRef.current.push(nextClickTimeMsRef.current);
+
+        // Advance schedules
+        nextStartTimeRef.current += clickIntervalSec;
+        nextClickTimeMsRef.current += clickIntervalSec * 1000;
       }
-      setIsPlaying(true);
-      nextNoteTimeRef.current = audioContext.currentTime + 0.05;
-      scheduler();
+    };
+
+    // Keep the audio thread fed every 25ms
+    schedulerTimerRef.current = window.setInterval(scheduler, 25);
+
+    return () => {
+      if (schedulerTimerRef.current) {
+        clearInterval(schedulerTimerRef.current);
+      }
+    };
+  }, [isPlaying, bpm, audioContext]);
+
+  // 2. THE RATE-OF-ATTACK TRANSIENT ENGINE
+  useEffect(() => {
+    if (!isPlaying || !analyser || !audioContext) return;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    let animationFrameId: number;
+    
+    let lastVolume = 0;
+    let lastHitTime = 0; 
+    const DEBOUNCE_MS = 150; // Prevents double-triggering from desk echo
+
+    const checkTransients = () => {
+      analyser.getByteFrequencyData(dataArray);
       
-      // Using a micro-delay (requestAnimationFrame) ensures isPlayingRef 
-      // updates before checkTransients fires, keeping the audio loop stable.
-      requestAnimationFrame(checkTransients);
-    }
-  }, [audioContext, isPlaying, scheduler, checkTransients]);
+      // Calculate average volume in the upper 70% of the frequency spectrum
+      // Desk taps and finger snaps are highly transient (high-frequency)
+      let highFreqSum = 0;
+      const startBin = Math.floor(bufferLength * 0.3);
+      for (let i = startBin; i < bufferLength; i++) {
+        highFreqSum += dataArray[i];
+      }
+      const currentVolume = highFreqSum / (bufferLength - startBin);
+
+      // DERIVATIVE CALCULATION: How quickly did the volume rise?
+      const rateOfAttack = currentVolume - lastVolume;
+      lastVolume = currentVolume;
+
+      const now = Date.now();
+
+      // Trigger if the volume spikes vertically, ignoring constant hums
+      if (rateOfAttack > 10 && (now - lastHitTime) > DEBOUNCE_MS) {
+        // Garbage-collect old clicks from queue
+        const windowLimit = now - 1000;
+        clickTimesQueueRef.current = clickTimesQueueRef.current.filter(t => t > windowLimit);
+
+        if (clickTimesQueueRef.current.length > 0) {
+          // Find the closest scheduled metronome click to match this tap
+          let closestClick = clickTimesQueueRef.current[0];
+          let minDiff = Math.abs(now - closestClick);
+
+          for (let i = 1; i < clickTimesQueueRef.current.length; i++) {
+            const diff = Math.abs(now - clickTimesQueueRef.current[i]);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestClick = clickTimesQueueRef.current[i];
+            }
+          }
+
+          const deltaMs = now - closestClick;
+
+          // Reject accidental spikes far away from the tempo window (+/- 250ms)
+          if (Math.abs(deltaMs) < 250) {
+            lastHitTime = now;
+            
+            // Dispatch target hit event
+            const hitEvent = new CustomEvent('kelso-hit', {
+              detail: { deltaMs }
+            });
+            window.dispatchEvent(hitEvent);
+          }
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(checkTransients);
+    };
+
+    animationFrameId = requestAnimationFrame(checkTransients);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isPlaying, analyser, audioContext, bpm]);
 
   return { isPlaying, toggleEngine, bpm };
 }

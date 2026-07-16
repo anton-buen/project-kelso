@@ -5,6 +5,7 @@ import { useVisionEngine } from './hooks/useVisionEngine';
 import { useSessionTelemetry } from './hooks/useSessionTelemetry';
 import { useDiagnosticAgent } from './hooks/useDiagnosticAgent';
 import { useSessionHistory } from './hooks/useSessionHistory';
+import { TimingGraph } from './components/TimingGraph'; // Imported our new double-exposure visual component
 import ReactMarkdown from 'react-markdown';
 
 function App() {
@@ -16,23 +17,27 @@ function App() {
   // Edge Layer Hooks
   const { status, errorMsg, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry();
   const { isPlaying, toggleEngine, bpm } = useAudioEngine(audioContextRef.current, analyserRef.current);
+  
+  // Hand-Isolating Vision Hook (Takes targetHand to keep biomechanical data pure)
   const { tensionLevel, isShouldersVisible, currentShoulderY } = useVisionEngine(
-      videoRef, 
-      poseLandmarkerRef.current, 
-      appPhase === 'active', 
-      baselineY,
-      targetHand // <--- Added here
-    );
+    videoRef, 
+    poseLandmarkerRef.current, 
+    appPhase === 'active', 
+    baselineY,
+    targetHand
+  );
+  
   const { sessionData, resetSession } = useSessionTelemetry(isPlaying, tensionLevel);
   
   // Agentic & Data Hooks
   const { diagnostic, analyzeSession } = useDiagnosticAgent();
   const { history, saveSession, storageError } = useSessionHistory();
 
+  // Keep a direct ref of the current Y to avoid closure stale-states during the 2-second tare
   const currentYRef = useRef(0);
   useEffect(() => { currentYRef.current = currentShoulderY; }, [currentShoulderY]);
 
-  // The 2-Second Silent Tare
+  // The 2-Second Silent Tare (Digital kitchen-scale baseline posture calibrator)
   useEffect(() => {
     if (appPhase === 'baseline') {
       const timer = setTimeout(() => {
@@ -54,9 +59,9 @@ function App() {
         return;
       }
 
-      if (showHistory) return; // Block input if vault is open
+      if (showHistory) return; // Prevent action inputs if the history vault is covering the screen
 
-      // Deterministic Start (L or R)
+      // Deterministic Start (Press L for Left hand focus, R for Right hand focus)
       if (appPhase === 'idle' && status === 'calibrated' && isShouldersVisible) {
         if (e.code === 'KeyL' || e.code === 'KeyR') {
           setTargetHand(e.code === 'KeyL' ? 'LEFT' : 'RIGHT');
@@ -74,7 +79,7 @@ function App() {
         setAppPhase('complete');
       }
 
-      // Reset
+      // Reset application state back to idle
       if (e.code === 'Escape' && appPhase === 'complete') {
         setAppPhase('idle');
       }
@@ -86,9 +91,12 @@ function App() {
   return (
     <div 
       className="min-h-screen bg-neutral-950 text-neutral-200 flex flex-col items-center justify-between p-8 overflow-hidden relative transition-colors duration-500"
-      style={{ boxShadow: appPhase === 'active' ? `inset 0 0 ${tensionLevel * 2}px ${tensionLevel / 2}px rgba(239, 68, 68, ${tensionLevel / 300})` : 'none' }}
+      style={{ 
+        // Tension Edge-Glow feedback loop
+        boxShadow: appPhase === 'active' ? `inset 0 0 ${tensionLevel * 2}px ${tensionLevel / 2}px rgba(239, 68, 68, ${tensionLevel / 300})` : 'none' 
+      }}
     >
-      {/* THE DARK MIRROR */}
+      {/* THE DARK MIRROR (Behind all other content) */}
       <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover opacity-10 grayscale blur-sm pointer-events-none z-0 transition-opacity duration-1000" playsInline muted />
 
       {/* TOP BAR */}
@@ -125,10 +133,15 @@ function App() {
       <div className="flex flex-col items-center justify-center space-y-8 z-10 w-full flex-grow">
         
         {appPhase === 'analyzing' ? (
+          
+          /* State 3: Analysis Loading */
           <div className="text-center space-y-4 animate-pulse">
             <p className="text-sm font-mono text-emerald-500/80 tracking-widest uppercase drop-shadow-md">[ Synthesizing Bio-Metrics... ]</p>
           </div>
+          
         ) : appPhase === 'complete' ? (
+          
+          /* State 4: The Un-Mediocre Dashboard */
           <div className="w-full max-w-2xl bg-neutral-900/80 border border-neutral-800 p-8 rounded backdrop-blur-md shadow-2xl">
             <h2 className="text-xs font-mono text-neutral-500 tracking-[0.3em] uppercase mb-6 border-b border-neutral-800 pb-4">Diagnostic Complete [ Target: {targetHand} ]</h2>
             <div className="text-sm font-mono text-neutral-300 leading-relaxed text-left w-full">
@@ -136,13 +149,23 @@ function App() {
                 {diagnostic || ''}
               </ReactMarkdown>
             </div>
+
+            {/* THE TIMING GRAPH (Our brand new Double-Exposure visual feedback element) */}
+            <TimingGraph sessionData={sessionData} />
+
             <p className="text-xs font-mono text-neutral-600 mt-8 text-center animate-pulse">[ Press ESC to return ]</p>
           </div>
+          
         ) : appPhase === 'baseline' ? (
+          
+          /* State 1.5: Capturing Resting Posture Baseline */
           <div className="text-center space-y-4">
             <p className="text-sm font-mono text-emerald-500/80 tracking-widest uppercase animate-pulse">[ Capturing Baseline... Relax. ]</p>
           </div>
+          
         ) : appPhase === 'active' ? (
+          
+          /* State 2: Active Routine (Zero-Distraction interface) */
           <div className="text-center space-y-12">
             <div className={`w-32 h-32 border ${tensionLevel > 50 ? 'border-red-900/50' : 'border-neutral-800'} rounded-full flex items-center justify-center opacity-30 mx-auto animate-[pulse_4s_ease-in-out_infinite] transition-colors duration-500`}>
               <div className={`w-24 h-24 border ${tensionLevel > 50 ? 'border-red-800/50' : 'border-neutral-700'} rounded-full flex items-center justify-center transition-colors duration-500`}>
@@ -154,7 +177,10 @@ function App() {
               <p className="text-xs font-mono text-neutral-600 animate-pulse">[ Press ENTER to conclude session ]</p>
             </div>
           </div>
+          
         ) : (
+          
+          /* State 1: Ambient Calibration & Posture Gate */
           <div className="text-center space-y-4">
             <h1 className="text-2xl font-light tracking-widest opacity-80 transition-opacity drop-shadow-lg">PROJECT-KELSO</h1>
             <div className={`text-sm font-mono transition-opacity duration-1000 drop-shadow-md`}>
