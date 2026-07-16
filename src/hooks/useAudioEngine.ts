@@ -1,15 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
 
-export function useAudioEngine(audioContext: AudioContext | null, analyser: AnalyserNode | null) {
+export type RhythmPattern = 'quarter' | 'eighth' | 'triplet' | 'sixteenth';
+
+export function useAudioEngine(
+  audioContext: AudioContext | null, 
+  analyser: AnalyserNode | null,
+  bpm: number,
+  pattern: RhythmPattern
+) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [bpm] = useState(120); // Default training tempo
 
   const schedulerTimerRef = useRef<number | null>(null);
-  const nextStartTimeRef = useRef<number>(0); // Accurate Web Audio clock time (seconds)
-  const nextClickTimeMsRef = useRef<number>(0); // Wall clock time (milliseconds)
-  const clickTimesQueueRef = useRef<number[]>([]); // Tracks planned click times for matching
+  const nextStartTimeRef = useRef<number>(0); 
+  const nextClickTimeMsRef = useRef<number>(0); 
+  const clickTimesQueueRef = useRef<number[]>([]); 
 
-  // Core Toggle: Handles Audio Context state and session play state
   const toggleEngine = () => {
     if (!audioContext) return;
     if (audioContext.state === 'suspended') {
@@ -18,7 +23,7 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
     setIsPlaying(prev => !prev);
   };
 
-  // 1. THE METRONOME SCHEDULER (Direct-to-Soundcard Pipeline)
+  // 1. THE METRONOME SCHEDULER (Subdivision-Aware Target Queue)
   useEffect(() => {
     if (!isPlaying || !audioContext) {
       if (schedulerTimerRef.current) {
@@ -30,38 +35,54 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
     }
 
     const clickIntervalSec = 60 / bpm;
-    const scheduleAheadTime = 0.1; // Look ahead 100ms
+    const quarterMs = clickIntervalSec * 1000;
+    const scheduleAheadTime = 0.1; 
     
-    // Sync initial clocks
     nextStartTimeRef.current = audioContext.currentTime + 0.05;
     nextClickTimeMsRef.current = Date.now() + 50;
 
     const scheduler = () => {
       while (nextStartTimeRef.current < audioContext.currentTime + scheduleAheadTime) {
-        // Schedule Oscillator click
+        // Schedule physical metronome audio on the quarter notes only
         const osc = audioContext.createOscillator();
         const gain = audioContext.createGain();
         
         osc.connect(gain);
         gain.connect(audioContext.destination);
 
-        osc.frequency.setValueAtTime(1000, nextStartTimeRef.current); // 1kHz target click
-        gain.gain.setValueAtTime(0.4, nextStartTimeRef.current);
-        gain.gain.exponentialRampToValueAtTime(0.001, nextStartTimeRef.current + 0.05); // Short snappy snap
+        osc.frequency.setValueAtTime(880, nextStartTimeRef.current); 
+        gain.gain.setValueAtTime(0.3, nextStartTimeRef.current);
+        gain.gain.exponentialRampToValueAtTime(0.001, nextStartTimeRef.current + 0.04); 
 
         osc.start(nextStartTimeRef.current);
-        osc.stop(nextStartTimeRef.current + 0.06);
+        osc.stop(nextStartTimeRef.current + 0.05);
 
-        // Record exactly when this click is scheduled to play in wall-clock time
-        clickTimesQueueRef.current.push(nextClickTimeMsRef.current);
+        // Populate target matching queue with pattern-specific subdivisions
+        const baseTime = nextClickTimeMsRef.current;
+        if (pattern === 'quarter') {
+          clickTimesQueueRef.current.push(baseTime);
+        } else if (pattern === 'eighth') {
+          clickTimesQueueRef.current.push(baseTime, baseTime + quarterMs / 2);
+        } else if (pattern === 'triplet') {
+          clickTimesQueueRef.current.push(
+            baseTime, 
+            baseTime + quarterMs / 3, 
+            baseTime + (quarterMs * 2) / 3
+          );
+        } else if (pattern === 'sixteenth') {
+          clickTimesQueueRef.current.push(
+            baseTime, 
+            baseTime + quarterMs / 4, 
+            baseTime + quarterMs / 2, 
+            baseTime + (quarterMs * 3) / 4
+          );
+        }
 
-        // Advance schedules
         nextStartTimeRef.current += clickIntervalSec;
-        nextClickTimeMsRef.current += clickIntervalSec * 1000;
+        nextClickTimeMsRef.current += quarterMs;
       }
     };
 
-    // Keep the audio thread fed every 25ms
     schedulerTimerRef.current = window.setInterval(scheduler, 25);
 
     return () => {
@@ -69,7 +90,7 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
         clearInterval(schedulerTimerRef.current);
       }
     };
-  }, [isPlaying, bpm, audioContext]);
+  }, [isPlaying, bpm, pattern, audioContext]);
 
   // 2. THE RATE-OF-ATTACK TRANSIENT ENGINE
   useEffect(() => {
@@ -81,13 +102,11 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
     
     let lastVolume = 0;
     let lastHitTime = 0; 
-    const DEBOUNCE_MS = 150; // Prevents double-triggering from desk echo
+    const DEBOUNCE_MS = 120; 
 
     const checkTransients = () => {
       analyser.getByteFrequencyData(dataArray);
       
-      // Calculate average volume in the upper 70% of the frequency spectrum
-      // Desk taps and finger snaps are highly transient (high-frequency)
       let highFreqSum = 0;
       const startBin = Math.floor(bufferLength * 0.3);
       for (let i = startBin; i < bufferLength; i++) {
@@ -95,20 +114,16 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
       }
       const currentVolume = highFreqSum / (bufferLength - startBin);
 
-      // DERIVATIVE CALCULATION: How quickly did the volume rise?
       const rateOfAttack = currentVolume - lastVolume;
       lastVolume = currentVolume;
 
       const now = Date.now();
 
-      // Trigger if the volume spikes vertically, ignoring constant hums
       if (rateOfAttack > 10 && (now - lastHitTime) > DEBOUNCE_MS) {
-        // Garbage-collect old clicks from queue
         const windowLimit = now - 1000;
         clickTimesQueueRef.current = clickTimesQueueRef.current.filter(t => t > windowLimit);
 
         if (clickTimesQueueRef.current.length > 0) {
-          // Find the closest scheduled metronome click to match this tap
           let closestClick = clickTimesQueueRef.current[0];
           let minDiff = Math.abs(now - closestClick);
 
@@ -122,11 +137,18 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
 
           const deltaMs = now - closestClick;
 
-          // Reject accidental spikes far away from the tempo window (+/- 250ms)
-          if (Math.abs(deltaMs) < 250) {
+          // Calculate matching window based on active subdivision
+          const clickIntervalSec = 60 / bpm;
+          let subInterval = clickIntervalSec;
+          if (pattern === 'eighth') subInterval = clickIntervalSec / 2;
+          else if (pattern === 'triplet') subInterval = clickIntervalSec / 3;
+          else if (pattern === 'sixteenth') subInterval = clickIntervalSec / 4;
+
+          const matchWindowMs = (subInterval * 1000) / 2;
+
+          if (Math.abs(deltaMs) < matchWindowMs) {
             lastHitTime = now;
             
-            // Dispatch target hit event
             const hitEvent = new CustomEvent('kelso-hit', {
               detail: { deltaMs }
             });
@@ -143,7 +165,7 @@ export function useAudioEngine(audioContext: AudioContext | null, analyser: Anal
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isPlaying, analyser, audioContext, bpm]);
+  }, [isPlaying, analyser, audioContext, bpm, pattern]);
 
-  return { isPlaying, toggleEngine, bpm };
+  return { isPlaying, toggleEngine };
 }

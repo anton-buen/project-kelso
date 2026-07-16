@@ -1,7 +1,5 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
 export default async function handler(req: any, res: any) {
-  // Only allow POST requests
+  // 1. Block unauthorized request methods
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -9,41 +7,66 @@ export default async function handler(req: any, res: any) {
   try {
     const { sessionData, targetHand } = req.body;
     
-    // Blast Radius Check: Ensure the API key exists
-    if (!process.env.LLM_API_KEY) {
-      return res.status(500).json({ error: 'Backend misconfiguration: Missing LLM API Key.' });
+    // 2. Blast Radius Check: Ensure the API key exists
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey) {
+      console.error("CRITICAL: Missing DEEPSEEK_API_KEY in environment variables.");
+      return res.status(500).json({ error: 'Backend misconfiguration: Missing API Key.' });
     }
 
-    // Initialize Gemini (using 1.5-flash for the optimal speed-to-context ratio)
-    const genAI = new GoogleGenerativeAI(process.env.LLM_API_KEY);
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });  
-    // The Architect's Prompt: Enforcing the "Un-Mediocre" response style
-    const prompt = `
-      You are the backend analytical engine for Project-Kelso, an elite neuro-motor drumming tool.
-      The user just completed a "Weak-Hand Leveler" exercise focusing strictly on their ${targetHand} hand.
+    // 3. The Architect's Prompt: Enforcing Strict JSON Output
+    const systemPrompt = `
+      You are an expert biomechanics and drum coordination AI. 
+      Analyze the provided telemetry data. 
+      YOU MUST RESPOND ONLY WITH VALID, PARSABLE JSON. NO MARKDOWN. NO CONVERSATION.
       
-      I am providing a JSON array of their physical strikes. 
-      - 'deltaMs': Timing accuracy in milliseconds. Negative is early (rushing). Positive is late (dragging).
-      - 'tensionScore': A 0-100 scale of biomechanical shoulder tension. Over 50 is bad.
-
-      Analyze this raw data and generate a strictly formatted, minimalist diagnostic dashboard. 
-      Do NOT be overly conversational. Be clinical, exact, and actionable. 
-      Format with short bullet points. Provide:
-      1. A one-sentence neuro-motor summary.
-      2. Constant Error Trend (Are they consistently rushing or dragging?).
-      3. Tension analysis (Did their shoulders hike up during the session?).
-      
-      Raw Session Data: ${JSON.stringify(sessionData)}
+      Schema:
+      {
+        "exercise": "Name of the inferred exercise (e.g., Weak-Hand Leveler)",
+        "summary": "A concise 2-sentence biomechanical breakdown.",
+        "ce_trend": {
+          "direction": "String detailing rushing vs dragging bias.",
+          "magnitude": "String detailing mean error and range in ms.",
+          "temporal_drift": "String detailing when fatigue or tension occurred."
+        }
+      }
     `;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const aiPayload = {
+      model: "deepseek-v4-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `TARGET HAND: ${targetHand}\n\nTELEMETRY DATA (ms deltas and tension scores):\n${JSON.stringify(sessionData)}` }
+      ],
+      // DeepSeek supports OpenAI's strict JSON mode
+      response_format: { type: "json_object" },
+      temperature: 0.1 // Kept very low for highly analytical, deterministic output
+    };
 
-    // Send the dashboard text back to the React frontend
-    return res.status(200).json({ diagnostic: responseText });
+    // 4. Native Fetch to DeepSeek (No heavy SDK required)
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(aiPayload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("DeepSeek API Failure:", errorText);
+      throw new Error("AI Provider rejected the request.");
+    }
+
+    const data = await response.json();
+    const aiDiagnosticText = data.choices[0].message.content;
+
+    // 5. Send the strictly formatted JSON string back down to the React frontend
+    return res.status(200).json({ diagnostic: aiDiagnosticText });
     
   } catch (error) {
-    console.error('Gemini API Error:', error);
+    console.error('Agentic API Error:', error);
     return res.status(500).json({ error: 'Agentic Engine failed to synthesize data.' });
   }
 }

@@ -1,40 +1,44 @@
 import { useState, useEffect } from 'react';
+import type { DiagnosticPayload } from '../components/DiagnosticDashboard';
 
-export interface HistoryEntry {
+export interface SessionRecord {
   id: string;
   date: string;
-  hand: string;
-  diagnostic: string;
+  hand: 'LEFT' | 'RIGHT';
+  diagnostic: DiagnosticPayload;
 }
 
 export function useSessionHistory() {
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [storageError, setStorageError] = useState(false);
+  const [history, setHistory] = useState<SessionRecord[]>([]);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('kelso_history');
-      if (stored) setHistory(JSON.parse(stored));
+      const saved = localStorage.getItem('kelso_history');
+      if (saved) {
+        setHistory(JSON.parse(saved));
+      }
     } catch (e) {
-      setStorageError(true);
+      console.warn("Storage locked.");
     }
   }, []);
 
-  const saveSession = (hand: string, diagnostic: string) => {
-    try {
-      const newEntry = {
-        id: Date.now().toString(),
-        date: new Date().toLocaleString(),
-        hand,
-        diagnostic
-      };
-      const updated = [newEntry, ...history];
-      setHistory(updated);
-      localStorage.setItem('kelso_history', JSON.stringify(updated));
-    } catch (e) {
-      setStorageError(true);
-    }
+  const saveSession = (hand: 'LEFT' | 'RIGHT', diagnostic: DiagnosticPayload) => {
+    const newRecord: SessionRecord = {
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      hand,
+      diagnostic
+    };
+    const updatedHistory = [newRecord, ...history].slice(0, 50);
+    setHistory(updatedHistory);
+    localStorage.setItem('kelso_history', JSON.stringify(updatedHistory));
   };
 
-  return { history, saveSession, storageError };
+  // ARCHITECTURAL UPDATE: Safe Deletion
+  const clearHistory = () => {
+    setHistory([]);
+    localStorage.removeItem('kelso_history');
+  };
+
+  return { history, saveSession, clearHistory };
 }
