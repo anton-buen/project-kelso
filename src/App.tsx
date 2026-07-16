@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useHardwareTelemetry } from './hooks/useHardwareTelemetry';
 import { useAudioEngine } from './hooks/useAudioEngine';
-import type { RhythmPattern } from './hooks/useAudioEngine';
 import { useVisionEngine } from './hooks/useVisionEngine';
 import { useSessionTelemetry } from './hooks/useSessionTelemetry';
 import { useDiagnosticAgent } from './hooks/useDiagnosticAgent';
@@ -9,30 +8,6 @@ import { useSessionHistory } from './hooks/useSessionHistory';
 import { TimingGraph } from './components/TimingGraph';
 import { DiagnosticDashboard } from './components/DiagnosticDashboard';
 
-const LOADING_REMARKS = [
-  "Slick-talking your webcam...",
-  "Tensioning drumheads...",
-  "Negotiating with your OS...",
-  "Warming up the AI...",
-  "Tuning the metronome...",
-  "Calibrating acoustics...",
-  "Measuring the temp. in your room...",
-  "Asking your left hand to behave...",
-  "Counting the pixels in screen...",
-  "Aligning physical coordinates...",
-  "Pre-heating the oven...",
-  "Asking your right hand to behave...",
-  "Measuring the speed of light...",
-  "Asking your neighbors to be quiet...",
-  "This should be the last message...",
-  "Well, this is awkward...",
-  "Still loading...",
-  "Almost there, promise...",
-  "Just a few more seconds...",
-  "If you can read this, you're patient...",
-  "If you can read this, you're very patient...",
-  "If you can read this, you're extremely patient..."
-];
 export default function App() {
   const [isBooted, setIsBooted] = useState(false);
 
@@ -100,7 +75,31 @@ function KelsoWorkspace() {
   const [pattern, setPattern] = useState<any>('quarter'); // Mapped loosely to avoid import issues from snippet cutoffs
   
   // Minimalist Remarks
-  const LOADING_REMARKS = ["Synthesizing Agent...", "Formatting Ledger...", "Uploading Telemetry...", "Aligning Coordinates..."];
+
+  const LOADING_REMARKS = [
+    "Slick-talking your webcam...",
+    "Tensioning drumheads...",
+    "Negotiating with your OS...",
+    "Warming up the AI...",
+    "Tuning the metronome...",
+    "Calibrating acoustics...",
+    "Measuring the temp. in your room...",
+    "Asking your left hand to behave...",
+    "Counting the pixels in screen...",
+    "Aligning physical coordinates...",
+    "Pre-heating the oven...",
+    "Asking your right hand to behave...",
+    "Measuring the speed of light...",
+    "Asking your neighbors to be quiet...",
+    "This should be the last message...",
+    "Well, this is awkward...",
+    "Still loading...",
+    "Almost there, promise...",
+    "Just a few more seconds...",
+    "If you can read this, you're patient...",
+    "If you can read this, you're very patient...",
+    "If you can read this, you're extremely patient..."
+  ];
   const [loadingText, setLoadingText] = useState(LOADING_REMARKS[0]);
 
   const [alignmentProgress, setAlignmentProgress] = useState(0);
@@ -252,7 +251,7 @@ function KelsoWorkspace() {
             </div>
           </>
         )}
-        
+
         {(appPhase === 'baseline' || appPhase === 'analyzing') && (
           <div className="text-center space-y-6">
             <div className="w-8 h-8 border-[1px] border-[#535C39] border-t-[#C2D685] rounded-full animate-spin mx-auto" />
