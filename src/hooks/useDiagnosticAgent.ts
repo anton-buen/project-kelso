@@ -5,13 +5,15 @@ export interface DiagnosticPayload {
   exercise: string;
   summary: string;
   ce_trend: {
-    bias_category: 'Strongly Dragging' | 'Moderately Dragging' | 'Neutral' | 'Moderately Rushing' | 'Strongly Rushing';
+    // Inject 'AWAITING DATA' into the union
+    bias_category: 'Strongly Dragging' | 'Moderately Dragging' | 'Neutral' | 'Moderately Rushing' | 'Strongly Rushing' | 'AWAITING DATA';
     direction: string;
     magnitude: string;
     temporal_drift: string;
   };
   kelso_metrics: {
-    instability_rating: 'Stable' | 'Critical Fluctuation' | 'Degrading';
+    // Inject 'AWAITING DATA' into the union
+    instability_rating: 'Stable' | 'Critical Fluctuation' | 'Degrading' | 'AWAITING DATA';
     fatigue_assessment: string;
     tension_correlation: string;
   };
@@ -72,7 +74,11 @@ export function useDiagnosticAgent() {
         body: JSON.stringify({ prompt: systemPrompt })
       });
 
-      if (!response.ok) throw new Error(`LLM API returned status ${response.status}`);
+      if (!response.ok) {
+        // Intercept the body of the failed request to surface the exact API error
+        const errorText = await response.text();
+        throw new Error(`Status ${response.status} - ${errorText}`);
+      }
 
       const rawText = await response.text();
       
@@ -83,8 +89,9 @@ export function useDiagnosticAgent() {
       setDiagnostic(payload);
       return payload;
 
-    } catch (error) {
-      console.error("[System] Diagnostic Agent failed to parse biomechanical payload:", error);
+    } catch (err: any) {
+      console.error(`[AI DIAGNOSTIC FAILURE] Agent rejected the payload.`);
+      console.error(`Reason:`, err.message || err);
       // We do not crash the app. We return null, allowing the UI to show a failure state or standard fallback.
       return null;
     } finally {

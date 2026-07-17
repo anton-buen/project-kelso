@@ -39,14 +39,14 @@ export default function App() {
     "If you can read this, you're patient...",
     "If you can read this, you're extremely patient..."
   ];  
-  
+
   const [loadingText, setLoadingText] = useState(LOADING_REMARKS[0]);
   const [alignmentProgress, setAlignmentProgress] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isAtLanding, setIsAtLanding] = useState(true);
 
   // Hardware hooks
-  const { status, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry();
+  const { status, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry(appPhase !== 'landing'); 
   const { isPlaying, toggleEngine } = useAudioEngine(audioContextRef.current, analyserRef.current, bpm, pattern);
   
   const { tensionLevel, isShouldersVisible, currentShoulderY } = useVisionEngine(
@@ -54,7 +54,7 @@ export default function App() {
   );
   
   const { sessionData, resetSession } = useSessionTelemetry(isPlaying, tensionLevel);
-  const { diagnostic, analyzeSession } = useDiagnosticAgent();
+  const { diagnostic, isAnalyzing, analyzeSession } = useDiagnosticAgent();
   const { history, saveSession, clearHistory } = useSessionHistory();
 
   const currentYRef = useRef(0);
@@ -70,9 +70,11 @@ export default function App() {
     }
   };
 
-  // POSTURE ALIGNMENT LOCK
+// POSTURE ALIGNMENT LOCK
   useEffect(() => {
     let timer: number;
+    
+    // CORRECTION: Swapped 'setup' back to 'idle' since 'idle' represents the calibration phase
     if (appPhase === 'idle' && status === 'calibrated' && !isUnlocked) {
       if (isShouldersVisible) {
         timer = window.setInterval(() => {
@@ -90,17 +92,17 @@ export default function App() {
     }
     return () => clearInterval(timer);
   }, [appPhase, status, isShouldersVisible, isUnlocked]);
-
+  
   // LOADING REMARKS
   useEffect(() => {
-    let interval: number;
-    if (appPhase === 'baseline' || appPhase === 'analyzing') {
-      interval = window.setInterval(() => {
-        setLoadingText(LOADING_REMARKS[Math.floor(Math.random() * LOADING_REMARKS.length)]);
-      }, 2000);
+    if (appPhase === 'complete' || appPhase === 'analyzing') {
+      sessionStorage.setItem('kelso_persisted_phase', appPhase);
+      sessionStorage.setItem('kelso_persisted_data', JSON.stringify(sessionData));
+    } else if (appPhase === 'landing' || appPhase === 'idle') {
+      sessionStorage.removeItem('kelso_persisted_phase');
+      sessionStorage.removeItem('kelso_persisted_data');
     }
-    return () => clearInterval(interval);
-  }, [appPhase]);
+  }, [appPhase, sessionData]);
 
   // BASELINE -> COUNTDOWN
   useEffect(() => {
@@ -203,7 +205,15 @@ export default function App() {
       className="min-h-screen bg-[#0a0a09] text-zinc-200 flex flex-col items-center justify-between p-6 overflow-hidden relative font-sans selection:bg-[#C2D685]/30 animate-in fade-in duration-1000"
       style={{ boxShadow: getAmbientGlow(), transition: 'box-shadow 0.3s ease-out' }}
     >
-      <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover opacity-[0.03] grayscale blur-xl pointer-events-none z-0" playsInline muted />
+      {/* Gated Video Mounting with Horizontal Mirroring */}
+      {appPhase !== 'landing' && (
+        <video 
+          ref={videoRef} 
+          className="absolute inset-0 w-full h-full object-cover opacity-[0.03] grayscale blur-xl pointer-events-none z-0 -scale-x-100" // Added -scale-x-100
+          playsInline 
+          muted 
+        />
+      )}
 
       {/* HEADER: Strictly gated to 'idle' setup phase to prevent deadlocks */}
       <header className="w-full max-w-2xl z-20 flex justify-end items-center h-12">
@@ -239,16 +249,20 @@ export default function App() {
         {appPhase === 'landing' && (
           <div className="w-full flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-700 ease-out space-y-16 mt-[-4rem]">
             
+            <div 
+              className="absolute inset-0 bg-[url('https://media.giphy.com/media/GeimqsH0TLDt4tScGw/giphy.gif')] bg-cover bg-center opacity-10 pointer-events-none z-0 mix-blend-luminosity scale-140"
+              style={{ filter: 'contrast(1.3) brightness(0.6) saturate(0.1)' }}
+            />
             <div className="text-center space-y-5">
               <h1 className="text-4xl font-light tracking-tight text-zinc-100">Project Kelso</h1>
               <p className="text-[10px] font-mono text-[#98A869] uppercase tracking-[0.3em]">
-                Learning Drums Without Drums
+                Learning Drums Without Drums!
               </p>
             </div>
 
             <div className="flex items-center gap-6">
               <a 
-                href="https://github.com" 
+                href="https://github.com/anton-buen/project-kelso" 
                 target="_blank" 
                 rel="noreferrer"
                 className={`${keycapBase} h-12 px-6 min-w-[5rem]`}
@@ -291,7 +305,9 @@ export default function App() {
         {(appPhase === 'baseline' || appPhase === 'analyzing') && (
           <div className="text-center space-y-6">
             <div className="w-8 h-8 border-[1px] border-[#535C39] border-t-[#C2D685] rounded-full animate-spin mx-auto" />
-            <p className="text-[10px] font-mono text-[#98A869] uppercase tracking-widest animate-pulse h-4">{loadingText}</p>
+            <p className="text-[10px] font-mono text-[#98A869] uppercase tracking-widest animate-pulse h-4">
+              {loadingText}
+            </p>
           </div>
         )}
 
@@ -354,24 +370,27 @@ export default function App() {
             </p>
           </div>
         )}
-
+        
         {appPhase === 'complete' && (
-          <div className="w-full bg-[#11120f]/80 border border-[#535C39]/20 p-8 md:p-12 rounded-[2rem] backdrop-blur-xl text-left animate-in slide-in-from-bottom-4 duration-500">
-            <DiagnosticDashboard data={diagnostic} targetHand={targetHand!} />
-            <div className="mt-10 pt-8 border-t border-[#535C39]/20">
-              <span className="block text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-6">Strike Telemetry Map</span>
-              <TimingGraph sessionData={sessionData} />
-            </div>
-            <div className="mt-10 pt-6 border-t border-white/5 text-center">
-              <button 
-                onClick={() => { setAppPhase('idle'); setIsUnlocked(false); setAlignmentProgress(0); }} 
-                className={`${keycapBase} h-12 px-6 min-w-[10rem]`}
-              >
-                <span className="group-hover:hidden text-lg font-light leading-none">⟲</span>
-                <span className="hidden group-hover:block text-[10px] font-mono uppercase tracking-widest text-zinc-400 whitespace-nowrap">Return to Workspace</span>
-              </button>
-            </div>
-          </div>
+          <DiagnosticDashboard 
+            data={diagnostic} 
+            aggregates={calculateSessionAggregates(sessionData, bpm)} 
+            bpm={bpm}
+            pattern={pattern}
+            sessionData={sessionData}
+            isAnalyzing={isAnalyzing}
+            targetHand={targetHand}     // <-- NEW: Inject the hand context
+            onRetry={async () => {
+              const currentAggs = calculateSessionAggregates(sessionData, bpm);
+              await analyzeSession(currentAggs, targetHand!);
+            }}
+            onClose={() => { 
+              sessionStorage.clear();
+              setAppPhase('idle'); 
+              setIsUnlocked(false); 
+              setAlignmentProgress(0); 
+            }} 
+          />
         )}
 
         {/* THE LEDGER VAULT */}

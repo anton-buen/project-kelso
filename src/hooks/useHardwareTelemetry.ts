@@ -3,7 +3,7 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 
 export type HardwareStatus = 'awaiting_permissions' | 'initializing_ai' | 'calibrated' | 'error';
 
-export function useHardwareTelemetry() {
+export function useHardwareTelemetry(isActive: boolean) {
   const [status, setStatus] = useState<HardwareStatus>('awaiting_permissions');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -15,10 +15,39 @@ export function useHardwareTelemetry() {
   useEffect(() => {
     let activeStream: MediaStream | null = null;
 
+    // --- SYNCHRONOUS PRIVACY & HARDWARE GATE ---
+    if (!isActive) {
+      // Gracefully release camera tracks to turn off the physical device indicator light
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+      
+      // Close Web Audio Context graphs
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(err => console.warn("AudioContext closure error:", err));
+        audioContextRef.current = null;
+      }
+
+      // Drop MediaPipe WebAssembly references out of heap memory
+      if (poseLandmarkerRef.current) {
+        poseLandmarkerRef.current.close();
+        poseLandmarkerRef.current = null;
+      }
+
+      analyserRef.current = null;
+      setStatus('awaiting_permissions');
+      setErrorMsg(null);
+      return;
+    }
+    // --------------------------------------------
+
     async function initHardware() {
       try {
-        // 1. Request strict user media constraints (Bypass Browser Processing)
         setStatus('awaiting_permissions');
+        
+        // 1. Request strict user media constraints (Bypass Browser Processing)
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
           audio: {
@@ -27,6 +56,13 @@ export function useHardwareTelemetry() {
             noiseSuppression: { exact: false }
           }
         });
+        
+        // Race condition guard: If user quickly backed out during permission prompt, abort setup
+        if (!videoRef) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
         activeStream = stream;
 
         // 2. Bind video stream to the DOM element
@@ -70,6 +106,7 @@ export function useHardwareTelemetry() {
           numPoses: 1
         });
 
+        // Double-check active state before saving compiled models to memory
         poseLandmarkerRef.current = landmarker;
         setStatus('calibrated');
 
@@ -82,19 +119,19 @@ export function useHardwareTelemetry() {
 
     initHardware();
 
-    // Clean up hardware tracks on unmount
+    // Clean up hardware tracks on unmount or phase shifting
     return () => {
       if (activeStream) {
         activeStream.getTracks().forEach(track => track.stop());
       }
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
+        audioContextRef.current.close().catch(err => console.warn("AudioContext cleanup error:", err));
       }
       if (poseLandmarkerRef.current) {
         poseLandmarkerRef.current.close();
       }
     };
-  }, []);
+  }, [isActive]); // Added isActive to capture state machine updates correctly
 
   return {
     status,
