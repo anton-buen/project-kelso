@@ -1,87 +1,96 @@
 import { useState } from 'react';
-import type { HitData } from './useSessionTelemetry';
-import type { DiagnosticPayload } from '../components/DiagnosticDashboard';
+import type { SessionAggregates } from './useSessionTelemetry';
+
+export interface DiagnosticPayload {
+  exercise: string;
+  summary: string;
+  ce_trend: {
+    bias_category: 'Strongly Dragging' | 'Moderately Dragging' | 'Neutral' | 'Moderately Rushing' | 'Strongly Rushing';
+    direction: string;
+    magnitude: string;
+    temporal_drift: string;
+  };
+  kelso_metrics: {
+    instability_rating: 'Stable' | 'Critical Fluctuation' | 'Degrading';
+    fatigue_assessment: string;
+    tension_correlation: string;
+  };
+}
 
 export function useDiagnosticAgent() {
-  // Source of Truth: Strictly typed to our new JSON Schema
   const [diagnostic, setDiagnostic] = useState<DiagnosticPayload | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false); // FIXED: Added missing state declaration
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const analyzeSession = async (sessionData: HitData[], targetHand: 'LEFT' | 'RIGHT') => {
-    
+  const analyzeSession = async (
+    aggregates: SessionAggregates,
+    targetHand: 'LEFT' | 'RIGHT'
+  ): Promise<DiagnosticPayload | null> => {
+    setIsAnalyzing(true);
+
     const systemPrompt = `
-      You are an expert biomechanics and drum coordination AI. 
-      Analyze the provided telemetry data. 
-      YOU MUST RESPOND ONLY WITH VALID, PARSABLE JSON. NO MARKDOWN. NO CONVERSATION.
+      You are a clinical biomechanics AI specialized in neuro-motor rhythm analysis based on the Kelso HKB coordination dynamics model.
+      Analyze the following session aggregates for a user's ${targetHand} hand and return a strict JSON object.
       
-      Schema:
+      SESSION METRICS:
+      - Total Strikes: ${aggregates.totalStrikes}
+      - Constant Error (Mean Offset): ${aggregates.meanOffsetMs.toFixed(2)}ms
+      - Motor Instability (StdDev): ${aggregates.stdDevMs.toFixed(2)}ms
+      - Tempo-Normalized CV: ${aggregates.tempoNormalizedCV.toFixed(2)}%
+      - Precision Zone (±20ms): ${aggregates.precisionZonePercentage.toFixed(2)}%
+      - Fatigue Index (Drift Slope): ${aggregates.driftSlope.toFixed(4)}
+      - Average Tension Load: ${aggregates.averageTension.toFixed(2)}
+      - Tension Variance: ${aggregates.tensionVariance.toFixed(2)}
+
+      RULES FOR CLASSIFICATION:
+      1. bias_category: Base this strictly on the Mean Offset. > +30ms is Dragging. < -30ms is Rushing. Apply 'Strongly' if magnitude exceeds 70ms. 'Neutral' if within ±15ms.
+      2. instability_rating: If CV > 15% AND Tension Variance is high, classify as 'Critical Fluctuation'. If slope is consistently drifting, 'Degrading'. Otherwise 'Stable'.
+      
+      OUTPUT FORMAT:
+      You must respond ONLY with a raw, stringified JSON object matching this exact schema:
       {
-        "exercise": "Name of the inferred exercise (e.g., Weak-Hand Leveler)",
-        "summary": "A concise 2-sentence biomechanical breakdown.",
+        "exercise": "Short title of the detected pattern",
+        "summary": "A detailed clinical paragraph analyzing the user's motor control, utilizing the provided precision and CV percentages.",
         "ce_trend": {
-          "direction": "String detailing rushing vs dragging bias.",
-          "magnitude": "String detailing mean error and range in ms.",
-          "temporal_drift": "String detailing when fatigue or tension occurred."
+          "bias_category": "Strongly Dragging" | "Moderately Dragging" | "Neutral" | "Moderately Rushing" | "Strongly Rushing",
+          "direction": "Brief description of the bias trajectory",
+          "magnitude": "Brief text quantifying the offset and spread",
+          "temporal_drift": "Brief analysis of the drift slope indicating fatigue or stability"
+        },
+        "kelso_metrics": {
+          "instability_rating": "Stable" | "Critical Fluctuation" | "Degrading",
+          "fatigue_assessment": "1 sentence evaluating physical breakdown based on drift slope",
+          "tension_correlation": "1 sentence evaluating if tension spikes correlated with timing variance"
         }
       }
     `;
 
-    // 1. NO DATA FALLBACK (Must return JSON object, not string)
-    if (sessionData.length === 0) {
-      const emptyPayload: DiagnosticPayload = {
-        exercise: "Unknown",
-        summary: "SYSTEM FAULT: No telemetry data collected. Session aborted.",
-        ce_trend: { direction: "N/A", magnitude: "0ms", temporal_drift: "N/A" }
-      };
-      setDiagnostic(emptyPayload);
-      return emptyPayload;
-    }
-
-    setIsAnalyzing(true);
-    
     try {
-      // 2. API HANDOFF (Passing the system prompt so the backend knows the schema)
-      const response = await fetch('/api/diagnostic', {
+      // NOTE: Replace this fetch block with your specific LLM endpoint (OpenAI, Gemini, etc.)
+      const response = await fetch('/api/llm/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionData, targetHand, systemPrompt }), 
+        body: JSON.stringify({ prompt: systemPrompt })
       });
+
+      if (!response.ok) throw new Error(`LLM API returned status ${response.status}`);
+
+      const rawText = await response.text();
       
-      if (!response.ok) throw new Error('Agentic endpoint failed.');
-      
-      const data = await response.json();
-      
-      // 3. SAFE PARSE: Extract the JSON from the backend's string response
-      // (This handles if the LLM accidentally wraps it in ```json blocks)
-      const cleanedText = data.diagnostic.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const payload: DiagnosticPayload = JSON.parse(cleanedText);
-      
+      // Strip markdown code blocks if the LLM hallucinates them around the JSON
+      const cleanedJson = rawText.replace(/```json\n?|\n?```/g, '').trim();
+      const payload = JSON.parse(cleanedJson) as DiagnosticPayload;
+
       setDiagnostic(payload);
       return payload;
-      
+
     } catch (error) {
-      console.error("LLM Handoff / Parse Error:", error);
-      
-      // 4. ARCHITECTURAL MANDATE: Fallback Local Summary (Must return JSON object)
-      const avgDelta = sessionData.reduce((acc, hit) => acc + hit.deltaMs, 0) / sessionData.length;
-      
-      const fallbackPayload: DiagnosticPayload = {
-        exercise: `${targetHand} Hand Baseline`,
-        summary: `AI AGENT OFFLINE. Executing local mathematical summary. ${sessionData.length} strikes recorded successfully.`,
-        ce_trend: {
-          direction: avgDelta > 0 ? "Dragging Bias" : "Rushing Bias",
-          magnitude: `Mean drift: ${avgDelta > 0 ? '+' : ''}${avgDelta.toFixed(1)}ms`,
-          temporal_drift: "Unavailable (Offline)"
-        }
-      };
-      
-      setDiagnostic(fallbackPayload);
-      return fallbackPayload;
-      
+      console.error("[System] Diagnostic Agent failed to parse biomechanical payload:", error);
+      // We do not crash the app. We return null, allowing the UI to show a failure state or standard fallback.
+      return null;
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  return { isAnalyzing, diagnostic, analyzeSession };
+  return { diagnostic, isAnalyzing, analyzeSession };
 }

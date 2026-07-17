@@ -1,3 +1,4 @@
+import React from 'react';
 import type { HitData } from '../hooks/useSessionTelemetry';
 
 interface TimingGraphProps {
@@ -6,45 +7,54 @@ interface TimingGraphProps {
 
 export function TimingGraph({ sessionData }: TimingGraphProps) {
   const MAX_MS = 200;
-  
+
   return (
-    <div className="w-full space-y-4">
-      <div className="flex justify-between text-[10px] font-mono text-zinc-500 uppercase tracking-widest px-2">
-        <span>[ -{MAX_MS}ms Rushing ]</span>
-        <span className="text-[#C2D685] font-bold shadow-sm">[ Perfect Tempo ]</span>
-        <span>[ +{MAX_MS}ms Dragging ]</span>
+    <div className="w-full flex flex-col space-y-6">
+      
+      {/* LEGEND */}
+      <div className="flex justify-between w-full text-[9px] font-mono text-zinc-600 uppercase tracking-widest px-2 whitespace-nowrap">
+        <span>[-200ms Rush]</span>
+        <span className="text-[#C2D685]/50">[ True Center ]</span>
+        <span>[+200ms Drag]</span>
       </div>
 
-      {/* Subtle Bias Gradient Background */}
-      <div className="relative w-full h-24 bg-[#0a0a09] border border-[#535C39]/30 rounded-xl overflow-hidden shadow-inner bg-[linear-gradient(90deg,rgba(255,255,255,0.01)_0%,rgba(194,214,133,0.04)_50%,rgba(255,255,255,0.01)_100%)]">
+      {/* GRAPH CONTAINER */}
+      <div className="relative w-full rounded-2xl bg-black/40 border border-white/5 overflow-hidden flex items-center justify-center h-48">
         
-        {/* Highly Visible Perfect Tempo Center Line */}
-        <div className="absolute top-0 bottom-0 left-1/2 w-[2px] bg-[#C2D685] shadow-[0_0_12px_rgba(194,214,133,0.8)] -translate-x-1/2 z-10" />
-        
-        {/* Strike Plotting - Razor Thin Lines */}
-        {sessionData.map((hit, i) => {
-          let delta = hit.deltaMs;
-          if (delta > MAX_MS) delta = MAX_MS;
-          if (delta < -MAX_MS) delta = -MAX_MS;
-          
-          const leftPos = 50 + (delta / MAX_MS) * 50;
-          
-          return (
-            <div 
-              key={i}
-              className="absolute top-0 bottom-0 w-px bg-[#E7FF9E] mix-blend-screen transition-all duration-300 z-20"
-              style={{ 
-                left: `${leftPos}%`,
-                opacity: Math.max(0.15, 1 - (hit.tensionScore / 100)),
-                boxShadow: '0 0 4px rgba(194, 214, 133, 0.3)'
-              }}
-            />
-          );
-        })}
+        {/* Zero-Axis */}
+        <div className="absolute inset-x-0 h-[1px] bg-[#C2D685]/15 z-0" />
+
+        {sessionData.length === 0 ? (
+          <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest animate-pulse z-10">
+            Awaiting kinetic telemetry...
+          </span>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-between px-4 z-10">
+            {sessionData.map((hit, index) => {
+              const percentage = Math.max(-100, Math.min(100, (hit.deltaMs / MAX_MS) * 100));
+              const isRushing = hit.deltaMs < 0;
+
+              return (
+                <div key={index} className="flex flex-col items-center h-full justify-center group relative w-3 cursor-crosshair">
+                  <div 
+                    className={`w-1 rounded-full transition-all duration-300 ${
+                      isRushing ? 'bg-amber-500/80 shadow-[0_0_8px_rgba(245,158,11,0.4)]' : 'bg-rose-500/80 shadow-[0_0_8px_rgba(244,63,94,0.4)]'
+                    }`}
+                    style={{ 
+                      height: `${Math.abs(percentage)}%`,
+                      transform: `translateY(${percentage / 2}%)`
+                    }}
+                  />
+                  {/* Micro-hover tooltips */}
+                  <span className="absolute bottom-4 opacity-0 group-hover:opacity-100 transition-opacity bg-[#11120f] border border-zinc-800 text-[10px] font-mono text-zinc-300 px-2 py-1 rounded shadow-xl z-20 pointer-events-none whitespace-nowrap">
+                    {hit.deltaMs > 0 ? '+' : ''}{Math.round(hit.deltaMs)}ms
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
-      <p className="text-center text-[9px] font-mono text-zinc-600 uppercase tracking-widest">
-        Visual Density Map: Thin clusters show neuro-motor consistency
-      </p>
     </div>
   );
 }
