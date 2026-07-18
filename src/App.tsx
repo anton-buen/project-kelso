@@ -509,10 +509,19 @@ export default function App() {
       )}
 
       {appPhase === 'landing' && (
-        <footer className="w-full h-12 flex items-end justify-center pb-4 z-20">
+        <footer className="w-full h-12 flex items-end justify-center pb-4 z-20 gap-4">
           <span className="text-[9px] font-mono text-zinc-700 uppercase tracking-widest">
             v2.0.26 // Production
           </span>
+          <span className="text-[9px] font-mono text-zinc-800 uppercase tracking-widest">|</span>
+          <a 
+            href="https://github.com/anton-buen" 
+            target="_blank" 
+            rel="noreferrer" 
+            className="text-[9px] font-mono text-zinc-600 hover:text-[#C2D685] uppercase tracking-widest transition-colors"
+          >
+            Built by Anton
+          </a>
         </footer>
       )}
     </div>
