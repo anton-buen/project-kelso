@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { DiagnosticPayload } from '../hooks/useDiagnosticAgent';
-export type { DiagnosticPayload }; 
+export type { DiagnosticPayload };
 import type { SessionAggregates, HitData } from '../hooks/useSessionTelemetry';
 import { TimingGraph } from './TimingGraph';
 
@@ -11,23 +11,31 @@ interface DiagnosticDashboardProps {
   pattern: string;
   sessionData: HitData[];
   isAnalyzing: boolean;
-  targetHand: 'LEFT' | 'RIGHT' | null; // <-- NEW INTERFACE PROP
+  targetHand: 'LEFT' | 'RIGHT' | null;
   onRetry: () => void;
   onClose: () => void;
 }
 
+/**
+ * Renders the post-session diagnostic report.
+ *
+ * When `data` is `null` (LLM failure or analysis pending), all AI-sourced fields
+ * are replaced by `safeData` — a deterministic fallback derived entirely from
+ * local `aggregates`. This guarantees the component is always renderable.
+ *
+ * `determineLocalBias` mirrors the five-tier classification used in the backend
+ * system prompt so the fallback labels are semantically consistent with LLM output.
+ */
 export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionData, isAnalyzing, targetHand, onRetry, onClose }: DiagnosticDashboardProps) {
   const [isMathDrawerOpen, setIsMathDrawerOpen] = useState(false);
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
 
-  // --- DETERMINISTIC TIME SPENT CALCULATION ---
   const firstHit = sessionData[0]?.timestamp || 0;
   const lastHit = sessionData[sessionData.length - 1]?.timestamp || 0;
   const elapsedMs = lastHit > firstHit ? lastHit - firstHit : 0;
   const elapsedSec = Math.floor(elapsedMs / 1000);
   const timeString = `${Math.floor(elapsedSec / 60).toString().padStart(2, '0')}:${(elapsedSec % 60).toString().padStart(2, '0')}`;
 
-  // --- DETERMINISTIC FALLBACK LOGIC ---
   const determineLocalBias = (meanOffset: number) => {
     if (Number.isNaN(meanOffset)) return 'AWAITING DATA';
     if (meanOffset < -50) return 'Strongly Rushing';
@@ -41,7 +49,7 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
     exercise: targetHand ? `${targetHand} Hand Routine` : 'Unclassified Routine',
     summary: 'Biomechanical telemetry analysis offline.',
     ce_trend: {
-      bias_category: determineLocalBias(aggregates.meanOffsetMs), 
+      bias_category: determineLocalBias(aggregates.meanOffsetMs),
       direction: 'Awaiting synchronous computation.',
       magnitude: `${aggregates.meanOffsetMs > 0 ? '+' : ''}${aggregates.meanOffsetMs.toFixed(1)}ms offset baseline.`,
       temporal_drift: 'Stabilized.'
@@ -53,7 +61,6 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
     }
   };
 
-  // ... (keep getBiasColorToken and getPatternText) ...
   const getBiasColorToken = (category: string) => {
     if (category.includes('Rushing')) return 'text-amber-500 font-bold';
     if (category.includes('Dragging')) return 'text-rose-500 font-bold';
@@ -71,32 +78,30 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
     }
   };
 
-  // TACTILE UI TOKENS
   const keycapBase = "group relative inline-flex items-center justify-center bg-[#11120f] border border-zinc-800/60 border-b-black rounded-xl shadow-[0_3px_0_0_rgba(0,0,0,0.8)] hover:bg-[#151613] hover:border-zinc-700/60 active:translate-y-[3px] active:shadow-none transition-all duration-150 ease-out cursor-pointer select-none";
   const keycapPrimary = "group relative inline-flex items-center justify-center bg-[#C2D685]/10 border border-[#C2D685]/20 border-b-[#C2D685]/5 rounded-xl shadow-[0_3px_0_0_rgba(10,10,10,0.9)] hover:bg-[#C2D685]/20 active:translate-y-[3px] active:shadow-none transition-all duration-150 ease-out text-[#C2D685] cursor-pointer";
   const drawerHeaderBase = "w-full flex items-center justify-between p-4 bg-[#151613]/60 border border-zinc-800/40 rounded-xl cursor-pointer select-none transition-all hover:bg-[#1a1b18] active:translate-y-[1px]";
 
   return (
     <div className="w-full max-w-2xl mx-auto bg-[#11120f]/80 border border-[#535C39]/20 p-6 md:p-10 rounded-[2rem] backdrop-blur-xl animate-in slide-in-from-bottom-4 duration-500 space-y-8 text-left">
-      
-      {/* ZONE 1: THE HUD */}
+
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-white/5 pb-6">
         <div className="space-y-2">
           <span className="text-[10px] font-mono tracking-widest uppercase text-zinc-500">
             Session Diagnostics
           </span>
-          <h2 className="text-3xl font-light tracking-tight text-zinc-100 leading-none uppercase">
-            {safeData.exercise}
-          </h2>
+        <h1 className="text-4xl font-light tracking-tight text-zinc-100 uppercase">
+          {targetHand} HAND
+        </h1>
           <div className="flex items-center gap-3 text-[10px] font-mono uppercase tracking-widest text-zinc-500 pt-1">
             <span>{bpm} BPM</span>
             <span className="w-1 h-1 rounded-full bg-zinc-700" />
             <span>{getPatternText(pattern)} Grid</span>
             <span className="w-1 h-1 rounded-full bg-zinc-700" />
-            <span className="text-[#98A869]">TIME: {timeString}</span> {/* NEW: TIME SPENT */}
+            <span className="text-[#98A869]">TIME: {timeString}</span>
           </div>
         </div>
-        
+
         <div className="flex items-center justify-center px-4 py-2 rounded-xl bg-white/[0.02] border border-white/5 shrink-0 select-none">
           <span className="text-[10px] font-mono tracking-widest text-zinc-400">
             TOTAL STRIKES // {aggregates.totalStrikes}
@@ -104,7 +109,31 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
         </div>
       </div>
 
-      {/* ZONE 2: THE KINETIC CANVAS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="p-5 rounded-2xl bg-[#151613]/40 border border-zinc-800/40 flex flex-col justify-between space-y-3">
+          <span className="text-[10px] font-mono tracking-widest uppercase text-zinc-500">
+            Kinetic Bias
+          </span>
+          <span className={`text-2xl tracking-tight leading-none ${getBiasColorToken(safeData.ce_trend.bias_category)}`}>
+            {safeData.ce_trend.bias_category.toUpperCase()}
+          </span>
+        </div>
+
+        <div className="p-5 rounded-2xl bg-[#151613]/40 border border-zinc-800/40 flex flex-col justify-between space-y-3">
+          <span className="text-[10px] font-mono tracking-widest uppercase text-zinc-500">
+            Precision Target
+          </span>
+          <div className="flex items-baseline gap-1.5 leading-none">
+            <span className="text-2xl font-mono font-medium tracking-tight text-zinc-100">
+              {Number.isNaN(aggregates.precisionZonePercentage) ? '0.0' : aggregates.precisionZonePercentage.toFixed(1)}%
+            </span>
+            <span className="text-[10px] font-mono tracking-widest text-zinc-500 uppercase">
+              In Pocket
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div className="space-y-3 pt-2">
         <span className="block text-[10px] font-mono text-zinc-500 uppercase tracking-widest pl-1">
           Strike Telemetry Map
@@ -112,16 +141,14 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
         <TimingGraph sessionData={sessionData} />
       </div>
 
-      {/* ZONE 3: THE TACTILE DRAWERS */}
       <div className="space-y-4 pt-4 border-t border-white/5">
-        
-        {/* Drawer A */}
+
         <div className="space-y-2">
           <button onClick={() => setIsMathDrawerOpen(!isMathDrawerOpen)} className={drawerHeaderBase}>
             <span className="text-[10px] font-mono tracking-widest uppercase text-zinc-300">[=] View Biomechanical Breakdown</span>
             <span className="text-[10px] font-mono text-zinc-500">{isMathDrawerOpen ? '[↑]' : '[↓]'}</span>
           </button>
-          
+
           <div className={`grid transition-all duration-300 ease-in-out ${isMathDrawerOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
             <div className="overflow-hidden">
               <div className="p-4 bg-black/20 border border-zinc-800/30 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-6 font-mono">
@@ -160,13 +187,12 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
           </div>
         </div>
 
-        {/* Drawer B */}
         <div className="space-y-2">
           <button onClick={() => setIsAiDrawerOpen(!isAiDrawerOpen)} className={drawerHeaderBase}>
             <span className="text-[10px] font-mono tracking-widest uppercase text-zinc-300">[=] View Synaptic Diagnostics Log</span>
             <span className="text-[10px] font-mono text-zinc-500">{isAiDrawerOpen ? '[↑]' : '[↓]'}</span>
           </button>
-          
+
           <div className={`grid transition-all duration-300 ease-in-out ${isAiDrawerOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
             <div className="overflow-hidden">
               <div className="p-5 bg-black/20 border border-zinc-800/30 rounded-xl space-y-4 text-xs">
@@ -197,35 +223,30 @@ export function DiagnosticDashboard({ data, aggregates, bpm, pattern, sessionDat
 
       </div>
 
-      {/* FOOTER ACTIONS */}
       <div className="flex flex-col sm:flex-row gap-6 justify-center pt-8 border-t border-white/5">
-        
-        <button 
+
+        <button
           onClick={onRetry}
           disabled={isAnalyzing}
           className={`${keycapPrimary} h-14 px-8 min-w-[10rem] ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
-          {/* Symbol state */}
           <span className="group-hover:hidden text-2xl font-light leading-none mb-1">
             {isAnalyzing ? '⋯' : '↻'}
           </span>
-          {/* Hover state */}
           <span className="hidden group-hover:block text-[11px] font-mono font-bold uppercase tracking-[0.2em]">
-            {isAnalyzing ? 'Fetching' : 'Refresh'}
+            {isAnalyzing ? 'Fetching' : 'Refresh Data'}
           </span>
         </button>
 
         <button onClick={onClose} className={`${keycapBase} h-14 px-8 min-w-[10rem]`}>
-          {/* Symbol state */}
           <span className="group-hover:hidden text-xl font-light leading-none text-zinc-500">
             ↵
           </span>
-          {/* Hover state */}
           <span className="hidden group-hover:block text-[11px] font-mono uppercase tracking-[0.2em] text-zinc-400">
-            PRACTICE
+            Practice Again
           </span>
         </button>
-        
+
       </div>
     </div>
   );

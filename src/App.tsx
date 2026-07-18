@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useHardwareTelemetry } from './hooks/useHardwareTelemetry';
 import { useAudioEngine } from './hooks/useAudioEngine';
+import type { RhythmPattern } from './hooks/useAudioEngine';
 import { useVisionEngine } from './hooks/useVisionEngine';
 import { useSessionTelemetry, calculateSessionAggregates } from './hooks/useSessionTelemetry';
 import { useDiagnosticAgent } from './hooks/useDiagnosticAgent';
@@ -13,12 +14,12 @@ export default function App() {
   const [countdownVal, setCountdownVal] = useState(5);
   const [targetHand, setTargetHand] = useState<'LEFT' | 'RIGHT' | null>(null);
   const [baselineY, setBaselineY] = useState<number | null>(null);
-  
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
-  
+
   const [bpm, setBpm] = useState(120);
-  const [pattern, setPattern] = useState<any>('quarter');
+  const [pattern, setPattern] = useState<RhythmPattern>('quarter');
 
   const LOADING_REMARKS = [
     "Wiping your webcam...",
@@ -38,21 +39,20 @@ export default function App() {
     "Just a few more seconds...",
     "If you can read this, you're patient...",
     "If you can read this, you're extremely patient..."
-  ];  
+  ];
 
   const [loadingText, setLoadingText] = useState(LOADING_REMARKS[0]);
   const [alignmentProgress, setAlignmentProgress] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isAtLanding, setIsAtLanding] = useState(true);
 
-  // Hardware hooks
-  const { status, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry(appPhase !== 'landing'); 
+  const { status, videoRef, audioContextRef, analyserRef, poseLandmarkerRef } = useHardwareTelemetry(appPhase !== 'landing');
   const { isPlaying, toggleEngine } = useAudioEngine(audioContextRef.current, analyserRef.current, bpm, pattern);
-  
+
   const { tensionLevel, isShouldersVisible, currentShoulderY } = useVisionEngine(
     videoRef, poseLandmarkerRef.current, appPhase === 'active', baselineY, targetHand
   );
-  
+
   const { sessionData, resetSession } = useSessionTelemetry(isPlaying, tensionLevel);
   const { diagnostic, isAnalyzing, analyzeSession } = useDiagnosticAgent();
   const { history, saveSession, clearHistory } = useSessionHistory();
@@ -60,7 +60,6 @@ export default function App() {
   const currentYRef = useRef(0);
   useEffect(() => { currentYRef.current = currentShoulderY; }, [currentShoulderY]);
 
-  // RECALIBRATION VECTOR
   const triggerRecalibrate = () => {
     setAlignmentProgress(0);
     setIsUnlocked(false);
@@ -70,11 +69,9 @@ export default function App() {
     }
   };
 
-// POSTURE ALIGNMENT LOCK
   useEffect(() => {
     let timer: number;
-    
-    // CORRECTION: Swapped 'setup' back to 'idle' since 'idle' represents the calibration phase
+
     if (appPhase === 'idle' && status === 'calibrated' && !isUnlocked) {
       if (isShouldersVisible) {
         timer = window.setInterval(() => {
@@ -83,39 +80,41 @@ export default function App() {
               setIsUnlocked(true);
               return 100;
             }
-            return prev + 2; 
+            return prev + 2;
           });
         }, 100);
       } else {
-        setAlignmentProgress(0); 
+        setAlignmentProgress(0);
       }
     }
     return () => clearInterval(timer);
   }, [appPhase, status, isShouldersVisible, isUnlocked]);
-  
-  // LOADING REMARKS
-  useEffect(() => {
-    if (appPhase === 'complete' || appPhase === 'analyzing') {
-      sessionStorage.setItem('kelso_persisted_phase', appPhase);
-      sessionStorage.setItem('kelso_persisted_data', JSON.stringify(sessionData));
-    } else if (appPhase === 'landing' || appPhase === 'idle') {
-      sessionStorage.removeItem('kelso_persisted_phase');
-      sessionStorage.removeItem('kelso_persisted_data');
-    }
-  }, [appPhase, sessionData]);
 
-  // BASELINE -> COUNTDOWN
+  useEffect(() => {
+    let interval: number;
+    if (appPhase === 'baseline' || appPhase === 'analyzing') {
+      let currentIndex = 0;
+      interval = window.setInterval(() => {
+        currentIndex = (currentIndex + 1) % LOADING_REMARKS.length;
+        setLoadingText(LOADING_REMARKS[currentIndex]);
+      }, 2500);
+    } else {
+      setLoadingText(LOADING_REMARKS[0]);
+    }
+
+    return () => clearInterval(interval);
+  }, [appPhase]);
+
   useEffect(() => {
     if (appPhase === 'baseline') {
       const timer = setTimeout(() => {
         setAppPhase('countdown');
-        toggleEngine(); 
+        toggleEngine();
       }, 2000);
       return () => clearTimeout(timer);
     }
   }, [appPhase, toggleEngine]);
 
-  // COUNTDOWN -> ACTIVE
   useEffect(() => {
     let timer: number;
     if (appPhase === 'countdown') {
@@ -124,7 +123,7 @@ export default function App() {
           if (prev <= 1) {
             setBaselineY(currentYRef.current);
             setAppPhase('active');
-            return 5; 
+            return 5;
           }
           return prev - 1;
         });
@@ -133,29 +132,25 @@ export default function App() {
     return () => clearInterval(timer);
   }, [appPhase]);
 
-  // SESSION CONCLUDE & GATED KEYBOARD ABORT
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.code === 'Enter' && appPhase === 'active') {
-        toggleEngine(); 
+        toggleEngine();
         setAppPhase('analyzing');
-        
-        // --- NEW KELSO MATH PIPELINE ---
+
         const aggregates = calculateSessionAggregates(sessionData, bpm);
-        const finalDiag = await analyzeSession(aggregates, targetHand!);
-        // -------------------------------
+        const finalDiag = await analyzeSession(aggregates, targetHand!, bpm, pattern);
 
         if (finalDiag) saveSession(targetHand!, finalDiag);
         setAppPhase('complete');
       }
-      
+
       if (e.key === 'Escape') {
-        // GATED ABORT: Prevent ESC deadlocks by ignoring the keydown if telemetry is actively looping.
         if (['baseline', 'countdown', 'active', 'analyzing'].includes(appPhase)) {
           console.warn("[System] Hardware interlock active. Abort suppressed.");
           return;
         }
-        
+
         if (isPlaying) toggleEngine();
         setIsAtLanding(true);
         setAppPhase('landing');
@@ -167,7 +162,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [appPhase, toggleEngine, analyzeSession, sessionData, targetHand, saveSession, isPlaying, bpm]); 
+  }, [appPhase, toggleEngine, analyzeSession, sessionData, targetHand, saveSession, isPlaying, bpm, pattern]);
 
   const triggerStart = (hand: 'LEFT' | 'RIGHT') => {
     setIsSettingsOpen(false);
@@ -196,37 +191,34 @@ export default function App() {
     }
   };
 
-  // TACTILE COMPONENT STYLES
   const keycapBase = "group relative inline-flex items-center justify-center bg-[#11120f] border border-zinc-800/60 border-b-black rounded-xl shadow-[0_3px_0_0_rgba(0,0,0,0.8)] hover:bg-[#151613] hover:border-zinc-700/60 active:translate-y-[3px] active:shadow-none transition-all duration-150 ease-out cursor-pointer";
   const keycapPrimary = "group relative inline-flex items-center justify-center bg-[#C2D685]/10 border border-[#C2D685]/20 border-b-[#C2D685]/5 rounded-xl shadow-[0_3px_0_0_rgba(10,10,10,0.9)] hover:bg-[#C2D685]/20 active:translate-y-[3px] active:shadow-none transition-all duration-150 ease-out text-[#C2D685] cursor-pointer";
 
   return (
-    <div 
+    <div
       className="min-h-screen bg-[#0a0a09] text-zinc-200 flex flex-col items-center justify-between p-6 overflow-hidden relative font-sans selection:bg-[#C2D685]/30 animate-in fade-in duration-1000"
       style={{ boxShadow: getAmbientGlow(), transition: 'box-shadow 0.3s ease-out' }}
     >
-      {/* Gated Video Mounting with Horizontal Mirroring */}
       {appPhase !== 'landing' && (
-        <video 
-          ref={videoRef} 
-          className="absolute inset-0 w-full h-full object-cover opacity-[0.03] grayscale blur-xl pointer-events-none z-0 -scale-x-100" // Added -scale-x-100
-          playsInline 
-          muted 
+        <video
+          ref={videoRef}
+          className="absolute inset-0 w-full h-full object-cover opacity-[0.03] grayscale blur-xl pointer-events-none z-0 -scale-x-100"
+          playsInline
+          muted
         />
       )}
 
-      {/* HEADER: Strictly gated to 'idle' setup phase to prevent deadlocks */}
       <header className="w-full max-w-2xl z-20 flex justify-end items-center h-12">
         {appPhase === 'idle' && !isAtLanding && (
           <div className="flex items-center gap-4 animate-in fade-in duration-500">
-            <button 
+            <button
               onClick={triggerRecalibrate}
               className={`${keycapBase} h-9 px-4 min-w-[3rem] overflow-hidden`}
             >
               <span className="group-hover:hidden text-sm font-light leading-none">⟳</span>
               <span className="hidden group-hover:block text-[9px] font-mono uppercase tracking-widest text-zinc-400 whitespace-nowrap">Recalibrate</span>
             </button>
-            <button 
+            <button
               onClick={() => {
                 setIsAtLanding(true);
                 setAppPhase('landing');
@@ -242,14 +234,12 @@ export default function App() {
         )}
       </header>
 
-      {/* CORE CANVAS */}
       <div className="z-10 w-full max-w-2xl flex flex-col items-center justify-center flex-grow transition-all duration-500">
-        
-        {/* PHASE: LANDING */}
+
         {appPhase === 'landing' && (
           <div className="w-full flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-700 ease-out space-y-16 mt-[-4rem]">
-            
-            <div 
+
+            <div
               className="absolute inset-0 bg-[url('https://media.giphy.com/media/GeimqsH0TLDt4tScGw/giphy.gif')] bg-cover bg-center opacity-10 pointer-events-none z-0 mix-blend-luminosity scale-140"
               style={{ filter: 'contrast(1.3) brightness(0.6) saturate(0.1)' }}
             />
@@ -261,17 +251,17 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-6">
-              <a 
-                href="https://github.com/anton-buen/project-kelso" 
-                target="_blank" 
+              <a
+                href="https://github.com/anton-buen/project-kelso"
+                target="_blank"
                 rel="noreferrer"
                 className={`${keycapBase} h-12 px-6 min-w-[5rem]`}
               >
                 <span className="group-hover:hidden text-lg font-light leading-none">{`</>`}</span>
                 <span className="hidden group-hover:block text-[10px] font-mono uppercase tracking-widest text-zinc-400">Repo</span>
               </a>
-              
-              <button 
+
+              <button
                 onClick={() => {
                   setIsAtLanding(false);
                   setAppPhase('idle');
@@ -281,9 +271,9 @@ export default function App() {
                 <span className="group-hover:hidden text-xl font-light leading-none">►</span>
                 <span className="hidden group-hover:block text-[11px] font-mono font-bold uppercase tracking-[0.2em]">Practice</span>
               </button>
-              
-              <a 
-                href="mailto:feedback@projectkelso.com"
+
+              <a
+                href="https://tally.so/r/vGvjNg"
                 className={`${keycapBase} h-12 px-6 min-w-[5rem]`}
               >
                 <span className="group-hover:hidden text-sm font-mono font-bold">@</span>
@@ -293,15 +283,15 @@ export default function App() {
           </div>
         )}
 
-        {/* PHASE: IDLE (Setup & Dock) */}
         {appPhase === 'idle' && !isVaultOpen && (
-          <div className="text-center space-y-4 mb-12 animate-in fade-in duration-500">
-            <h1 className="text-2xl font-light tracking-tight text-zinc-100 opacity-90">Project Kelso</h1>
-            <p className="text-[10px] font-mono uppercase tracking-[0.3em] opacity-0 pointer-events-none">Placeholder</p>
+          <div className="text-center space-y-2 mb-12 animate-in fade-in duration-500 max-w-sm mx-auto">
+            <h1 className="text-xl font-light tracking-tight text-zinc-100 opacity-90">Posture Alignment</h1>
+            <p className="text-[10px] font-mono text-zinc-400 uppercase tracking-[0.1em]">
+              Please ensure your shoulders are level and visible within the frame.
+            </p>
           </div>
         )}
 
-        {/* ACTIVE & RECORDING PHASES */}
         {(appPhase === 'baseline' || appPhase === 'analyzing') && (
           <div className="text-center space-y-6">
             <div className="w-8 h-8 border-[1px] border-[#535C39] border-t-[#C2D685] rounded-full animate-spin mx-auto" />
@@ -330,12 +320,12 @@ export default function App() {
         {appPhase === 'active' && (
           <div className="text-center space-y-10 w-full max-w-sm mx-auto animate-in zoom-in-95 duration-300">
             <div className={`relative flex flex-col justify-center items-center mx-auto w-64 h-64 rounded-full bg-black/20 border backdrop-blur-sm transition-all duration-500 ease-out ${
-                !isShouldersVisible ? 'border-amber-500/50 shadow-[0_0_30px_rgba(245,158,11,0.15)]' : 
-                tensionLevel > 40 ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 
+                !isShouldersVisible ? 'border-amber-500/50 shadow-[0_0_30px_rgba(245,158,11,0.15)]' :
+                tensionLevel > 40 ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' :
                 'border-white/5'
               }`}
             >
-              <div 
+              <div
                 className="absolute inset-0 rounded-full transition-all duration-200 ease-linear"
                 style={{
                   boxShadow: tensionLevel > 40 ? `inset 0 0 ${tensionLevel}px rgba(239,68,68,0.15)` : 'none',
@@ -346,7 +336,7 @@ export default function App() {
               <span className="text-[4.5rem] font-sans font-extralight tracking-widest text-zinc-100 z-10 leading-none mb-6">
                 {targetHand === 'LEFT' ? 'L' : 'R'}
               </span>
-              
+
               <div className="z-10 min-h-[40px] flex items-center justify-center">
                 {!isShouldersVisible ? (
                   <span className="text-[10px] font-mono text-amber-500 uppercase tracking-widest bg-amber-500/10 px-4 py-1.5 rounded-full border border-amber-500/20">
@@ -370,30 +360,29 @@ export default function App() {
             </p>
           </div>
         )}
-        
+
         {appPhase === 'complete' && (
-          <DiagnosticDashboard 
-            data={diagnostic} 
-            aggregates={calculateSessionAggregates(sessionData, bpm)} 
+          <DiagnosticDashboard
+            data={diagnostic}
+            aggregates={calculateSessionAggregates(sessionData, bpm)}
             bpm={bpm}
             pattern={pattern}
             sessionData={sessionData}
             isAnalyzing={isAnalyzing}
-            targetHand={targetHand}     // <-- NEW: Inject the hand context
+            targetHand={targetHand}
             onRetry={async () => {
               const currentAggs = calculateSessionAggregates(sessionData, bpm);
-              await analyzeSession(currentAggs, targetHand!);
+              await analyzeSession(currentAggs, targetHand!, bpm, pattern);
             }}
-            onClose={() => { 
+            onClose={() => {
               sessionStorage.clear();
-              setAppPhase('idle'); 
-              setIsUnlocked(false); 
-              setAlignmentProgress(0); 
-            }} 
+              setAppPhase('idle');
+              setIsUnlocked(false);
+              setAlignmentProgress(0);
+            }}
           />
         )}
 
-        {/* THE LEDGER VAULT */}
         {isVaultOpen && appPhase === 'idle' && (
           <div className="w-full max-w-sm mx-auto bg-[#11120f]/80 border border-[#535C39]/20 p-6 rounded-[2rem] backdrop-blur-xl text-left animate-in zoom-in-95 duration-200 mt-8">
             <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-4">
@@ -407,7 +396,7 @@ export default function App() {
                 )}
               </div>
             </div>
-            
+
             <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
               {history.length === 0 ? (
                 <p className="text-[10px] font-mono text-zinc-600 text-center py-8 uppercase tracking-widest">No telemetry found.</p>
@@ -429,18 +418,17 @@ export default function App() {
         )}
       </div>
 
-      {/* THE SMART DOCK (Settings & Hand Selection) */}
       {appPhase === 'idle' && (
         <div className="absolute bottom-8 left-0 w-full flex flex-col items-center z-20 px-4">
-          
+
           {isSettingsOpen && !isVaultOpen && (
             <div className="mb-6 p-6 w-full max-w-xs bg-[#11120f]/90 border border-zinc-800/50 rounded-[2rem] backdrop-blur-xl shadow-2xl animate-in slide-in-from-bottom-2 duration-200">
               <div className="space-y-8">
-                
+
                 <div className="space-y-4">
                   <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Rhythm</label>
                   <div className="flex justify-between gap-3">
-                    {['quarter', 'eighth', 'triplet', 'sixteenth'].map((p) => (
+                    {(['quarter', 'eighth', 'triplet', 'sixteenth'] as RhythmPattern[]).map((p) => (
                       <button
                         key={p} onClick={() => setPattern(p)}
                         className={`${keycapBase} flex-1 h-12 ${pattern === p ? '!border-[#C2D685]/30 !text-[#C2D685]' : ''}`}
@@ -473,7 +461,7 @@ export default function App() {
           )}
 
           <div className="flex items-center justify-center p-2 bg-[#11120f]/90 rounded-full border border-zinc-800/50 shadow-2xl backdrop-blur-xl">
-            
+
             <button onClick={() => { setIsSettingsOpen(!isSettingsOpen); setIsVaultOpen(false); }} className={`p-4 rounded-full transition-all active:scale-95 ${isSettingsOpen ? 'bg-white/5 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'}`}>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8v3h-3v10h-2V10H8V7z" /></svg>
             </button>
@@ -519,8 +507,7 @@ export default function App() {
           </div>
         </div>
       )}
-      
-      {/* Footer */}
+
       {appPhase === 'landing' && (
         <footer className="w-full h-12 flex items-end justify-center pb-4 z-20">
           <span className="text-[9px] font-mono text-zinc-700 uppercase tracking-widest">

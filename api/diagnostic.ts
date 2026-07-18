@@ -1,96 +1,105 @@
+/** Maximum serverless function execution time (seconds). Requires Vercel Pro or unlocked Hobby plan. */
+export const maxDuration = 60;
+
+/**
+ * POST /api/diagnostic
+ *
+ * Accepts a session telemetry payload, constructs a Kelso HKB-framed prompt,
+ * and proxies the request to the upstream LLM gateway. Returns the raw JSON
+ * string from the model's `choices[0].message.content` field.
+ *
+ * @param req.body.aggregates  - Computed session aggregates from `calculateSessionAggregates`
+ * @param req.body.targetHand  - `'LEFT'` or `'RIGHT'`
+ * @param req.body.bpm         - Session tempo; falls back to 120 if invalid
+ * @param req.body.pattern     - Subdivision pattern; validated against allowlist
+ *
+ * Timeout strategy: AbortController fires at 55 s, 5 s under the function limit,
+ * to ensure a clean 504 response rather than a hard platform kill.
+ */
 export default async function handler(req: any, res: any) {
-  // 1. Block unauthorized request methods
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Guard against missing API Key
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
-    console.error("CRITICAL: Missing DEEPSEEK_API_KEY in environment variables.");
     return res.status(500).json({ error: 'Backend misconfiguration: Missing API Key.' });
   }
+  const cleanApiKey = apiKey.replace(/[\r\n\s]+/g, '');
 
   try {
-    const { sessionData, targetHand } = req.body;
-    
-    // The Architect's Prompt: Enforcing Strict JSON Output
+    const { aggregates, targetHand, bpm, pattern } = req.body;
+
+    if (!aggregates) {
+      return res.status(400).json({ error: 'Missing telemetry aggregates payload.' });
+    }
+
+    const safeBpm = Math.round(Number(bpm)) || 120;
+    const validPatterns = ['quarter', 'eighth', 'triplet', 'sixteenth'];
+    const safePattern = validPatterns.includes(pattern) ? pattern : 'quarter';
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 55000);
+
     const systemPrompt = `
-      You are an expert biomechanics and drum coordination AI. 
-      Analyze the provided telemetry data. 
-      YOU MUST RESPOND ONLY WITH VALID, PARSABLE JSON. NO MARKDOWN. NO CONVERSATION.
+      You are an expert clinical biomechanics AI analyzing a motor-rhythm drumming session based on the Kelso HKB coordination model.
       
-      Schema:
+      YOU MUST RESPOND ONLY WITH VALID, PARSABLE JSON. NO MARKDOWN FENCES. NO CONVERSATIONAL GREETINGS.
+
+      Required Schema:
       {
-        "exercise": "Name of the inferred exercise (e.g., Weak-Hand Leveler)",
+        "exercise": "Inferred exercise name (e.g., ${targetHand || 'Unclassified'} Hand Leveler)",
         "summary": "A concise 2-sentence biomechanical breakdown.",
         "ce_trend": {
-          "direction": "String detailing rushing vs dragging bias.",
-          "magnitude": "String detailing mean error and range in ms.",
-          "temporal_drift": "String detailing when fatigue or tension occurred."
+          "bias_category": "Strongly Dragging, Moderately Dragging, Neutral, Moderately Rushing, or Strongly Rushing",
+          "direction": "Detailed analysis of rhythmic bias trajectory.",
+          "magnitude": "Commentary on Mean Error and StdDev.",
+          "temporal_drift": "Commentary on drift slope/fatigue over time."
+        },
+        "kelso_metrics": {
+          "instability_rating": "Stable, Critical Fluctuation, or Degrading",
+          "fatigue_assessment": "Kinetic breakdown analysis.",
+          "tension_correlation": "How average tension relates to precision."
         }
       }
     `;
 
+    const userMessage = `TARGET: ${safeBpm} BPM on a ${safePattern} grid. METRICS: Mean Offset: ${aggregates.meanOffsetMs}ms, Instability (SD): ${aggregates.stdDevMs}ms, Normalized CV: ${aggregates.tempoNormalizedCV}%, Fatigue Slope: ${aggregates.driftSlope}, Average Tension: ${aggregates.averageTension}.`;
+
     const aiPayload = {
-      model: "deepseek-v4-flash-free", // Added "-free" to bypass billing gates!
+      model: "deepseek-v4-flash-free",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `TARGET HAND: ${targetHand}\n\nTELEMETRY DATA (ms deltas and tension scores):\n${JSON.stringify(sessionData)}` }
+        { role: "user", content: userMessage }
       ],
       response_format: { type: "json_object" },
-      temperature: 0.1 
+      temperature: 0.1
     };
-    // 2. Clean up the API key to eliminate any trailing Windows whitespace
-    const cleanApiKey = apiKey.replace(/[\r\n\s]+/g, '');
 
-    // 3. Native Fetch to OpenCode Zen AI Gateway (NOT api.deepseek.com)
     const response = await fetch("https://opencode.ai/zen/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${cleanApiKey}`
       },
-      body: JSON.stringify(aiPayload)
+      body: JSON.stringify(aiPayload),
+      signal: controller.signal
     });
 
-    // 4. Graceful HTTP Error Interception (Zero process crash)
+    clearTimeout(timeoutId);
+
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("OpenCode Zen API Failure Details:", errorText);
-      
-      return res.status(200).json({ 
-        diagnostic: JSON.stringify({
-          exercise: "Offline Fallback (Gateway Error)",
-          summary: "OpenCode Zen returned a validation error. Please check your account balance and credentials.",
-          ce_trend: {
-            direction: "Checking locally...",
-            magnitude: "Checking locally...",
-            temporal_drift: "API Offline"
-          }
-        })
-      });
+      return res.status(response.status).json({ error: `Upstream gateway rejection: ${errorText}` });
     }
 
     const data = await response.json();
-    const aiDiagnosticText = data.choices[0].message.content;
+    return res.status(200).send(data.choices[0].message.content);
 
-    // 5. Send the strictly formatted JSON string back down to the React frontend
-    return res.status(200).json({ diagnostic: aiDiagnosticText });
-    
   } catch (error: any) {
-    console.error('Agentic API Error Caught Gracefully:', error);
-    
-    return res.status(200).json({ 
-      diagnostic: JSON.stringify({
-        exercise: "Offline Fallback (Network Error)",
-        summary: `Network request aborted: ${error.message || error}`,
-        ce_trend: {
-          direction: "Checking locally...",
-          magnitude: "Checking locally...",
-          temporal_drift: "API Offline"
-        }
-      })
-    });
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ error: 'Gateway Timeout: AI took too long to respond.' });
+    }
+    return res.status(500).json({ error: 'Internal pipeline crash handling LLM transport.' });
   }
 }

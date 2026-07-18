@@ -1,13 +1,25 @@
 import { useState, useEffect } from 'react';
-import type { DiagnosticPayload } from '../components/DiagnosticDashboard';
+import type { DiagnosticPayload } from './useDiagnosticAgent';
 
+/** A persisted record of a completed diagnostic session. */
 export interface SessionRecord {
+  /** `crypto.randomUUID()` identifier. */
   id: string;
+  /** ISO 8601 timestamp of when the session was saved. */
   date: string;
+  /** Hand that was trained in this session. */
   hand: 'LEFT' | 'RIGHT';
+  /** Full LLM diagnostic payload for this session. */
   diagnostic: DiagnosticPayload;
 }
 
+/**
+ * Persists and retrieves session records from `localStorage` under the key
+ * `kelso_history`. The ledger is capped at 50 entries (newest first).
+ *
+ * `localStorage` access is wrapped in a try/catch to handle private-browsing
+ * environments where storage may be locked or quota-exceeded.
+ */
 export function useSessionHistory() {
   const [history, setHistory] = useState<SessionRecord[]>([]);
 
@@ -22,6 +34,11 @@ export function useSessionHistory() {
     }
   }, []);
 
+  /**
+   * Prepends a new record to the ledger and syncs to `localStorage`.
+   * @param hand       - Hand context for the completed session.
+   * @param diagnostic - Parsed `DiagnosticPayload` from the analysis step.
+   */
   const saveSession = (hand: 'LEFT' | 'RIGHT', diagnostic: DiagnosticPayload) => {
     const newRecord: SessionRecord = {
       id: crypto.randomUUID(),
@@ -34,7 +51,7 @@ export function useSessionHistory() {
     localStorage.setItem('kelso_history', JSON.stringify(updatedHistory));
   };
 
-  // ARCHITECTURAL UPDATE: Safe Deletion
+  /** Removes all records from state and `localStorage`. */
   const clearHistory = () => {
     setHistory([]);
     localStorage.removeItem('kelso_history');
