@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { DiagnosticPayload } from '../hooks/useDiagnosticAgent';
 export type { DiagnosticPayload };
 import type { SessionAggregates, HitData } from '../hooks/useSessionTelemetry';

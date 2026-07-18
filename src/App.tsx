@@ -6,7 +6,6 @@ import { useVisionEngine } from './hooks/useVisionEngine';
 import { useSessionTelemetry, calculateSessionAggregates } from './hooks/useSessionTelemetry';
 import { useDiagnosticAgent } from './hooks/useDiagnosticAgent';
 import { useSessionHistory } from './hooks/useSessionHistory';
-import { TimingGraph } from './components/TimingGraph';
 import { DiagnosticDashboard } from './components/DiagnosticDashboard';
 
 export default function App() {
@@ -23,21 +22,19 @@ export default function App() {
 
   const LOADING_REMARKS = [
     "Wiping your webcam...",
-    "Tensioning drumheads...",
-    "Negotiating with your OS...",
+    "The brain treats drumming as just muscles and nerves negotiating stability",
     "Warming up the AI...",
+    "Muscle tension shrinks your brain’s timing windows. Relax.",
     "Tuning the metronome...",
     "Calibrating acoustics...",
-    "Asking your shoulders to behave...",
-    "Counting the pixels in screen...",
-    "Aligning physical coordinates...",
+    "Rhythmic drift isn’t just sloppy timing; it’s a non‑linear neural shift",
     "Pre-heating the oven...",
-    "Asking your neighbors to be quiet...",
-    "Well, this is awkward...",
+    "Humans have two rhythms: moving limbs together or alternating them.",
     "Still loading...",
     "Almost there, promise...",
+    "Speed up alternating hand movements, and your brain flips into a new rhythm",
     "Just a few more seconds...",
-    "If you can read this, you're patient...",
+    "Right before your rhythm slips at high speed, your body hits 'critical fluctuations'",
     "If you can read this, you're extremely patient..."
   ];
 
@@ -287,7 +284,8 @@ export default function App() {
           <div className="text-center space-y-2 mb-12 animate-in fade-in duration-500 max-w-sm mx-auto">
             <h1 className="text-xl font-light tracking-tight text-zinc-100 opacity-90">Posture Alignment</h1>
             <p className="text-[10px] font-mono text-zinc-400 uppercase tracking-[0.1em]">
-              Please ensure your shoulders are level and visible within the frame.
+              Please ensure your shoulders are level<br /> 
+              and visible within the frame.
             </p>
           </div>
         )}

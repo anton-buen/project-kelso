@@ -1,4 +1,3 @@
-import React from 'react';
 import type { HitData } from '../hooks/useSessionTelemetry';
 
 interface TimingGraphProps {
