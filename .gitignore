@@ -31,3 +31,8 @@ dist-ssr
 
 .vercel
 .env*
+
+.vercel/
+.next/
+dist/
+build/
