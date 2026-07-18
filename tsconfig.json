@@ -16,7 +16,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["src/**/*", "api/**/*"]
 }
